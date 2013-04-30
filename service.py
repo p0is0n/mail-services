@@ -17,12 +17,12 @@
 # along with Mail-Services.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import sys
-import types
 
 from twisted.application.service import Application, MultiService
 from twisted.application.internet import TimerService, TCPServer
-from twisted.python.log import msg, err
+
+from core.constants import DEBUG
+from core.configs import config
 
 from services.sender import SenderService
 from services.receiver import ReceiverService
@@ -30,12 +30,9 @@ from services.receiver import ReceiverService
 
 application = Application("Mail-Services")
 
-# gc.set_debug(gc.DEBUG_LEAK)
-# gc.enable()
-
 # Make services
 senderService = SenderService()
-receiverService = ReceiverService('tcp:58969')
+receiverService = ReceiverService(config.get('receiver', 'listen'))
 
 services = MultiService()
 services.setServiceParent(application)

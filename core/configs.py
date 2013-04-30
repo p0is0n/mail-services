@@ -76,7 +76,7 @@ class Config(ConfigParser, Notify):
 
 	defaultConfig = '\n'.join((
 	  '[common]',
-	  'debug=yes',
+	  'debug=no',
 	  'bindAddresses=""',
 
 	  '[db]',
@@ -88,6 +88,9 @@ class Config(ConfigParser, Notify):
 	  'interval-empty=2.0',
 	  'interval-next=0.5',
 	  'attach-images=yes',
+
+	  '[receiver]',
+	  'listen=tcp:6132',
 
 	  '[smtp]',
 	  'hostname=localhost',
