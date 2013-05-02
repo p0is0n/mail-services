@@ -80,11 +80,10 @@ class Config(ConfigParser, Notify):
 	  'bindAddresses=""',
 
 	  '[db]',
-	  'encoding=utf8',
-	  'database={0}'.format(rel('dbs', 'main.db')),
-	  'inactive=3600',
+	  'sync=3600 0, 120 100',
 
 	  '[sender]',
+	  'workers=1',
 	  'interval-empty=2.0',
 	  'interval-next=0.5',
 	  'attach-images=yes',
@@ -95,8 +94,8 @@ class Config(ConfigParser, Notify):
 	  '[smtp]',
 	  'hostname=localhost',
 	  'portname=25',
-	  'username=username',
-	  'password=password',
+	  'username=',
+	  'password=',
 	  'ssl=no',
 	))
 
@@ -118,6 +117,19 @@ class Config(ConfigParser, Notify):
 
 	def debugMode(self):
 		return not not self.getboolean('common', 'debug')
+
+	def dbSync(self):
+		sync = []
+
+		for row in self.get('db', 'sync').split(','):
+			row = row.split()
+			row = map(lambda row: int(row.strip()), row)
+
+			if len(row) == 2:
+				sync.append(row)
+
+		# Success
+		return sync
 
 
 config = Config()

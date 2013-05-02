@@ -27,7 +27,7 @@ from cStringIO import StringIO
 from pprint import pprint
 from time import strftime, time
 from uuid import uuid4
-from types import ListType, TupleType, UnicodeType, DictType
+from types import ListType, TupleType, UnicodeType, DictType, StringTypes
 from json import loads, dumps
 from collections import defaultdict
 
@@ -39,6 +39,8 @@ from email.mime.image import MIMEImage
 from email.mime.base import MIMEBase
 from email.header import Header
 from email.message import Message
+from email.generator import Generator
+from email.utils import make_msgid
 from smtplib import SMTP_PORT, SMTP_SSL_PORT
 
 from twisted.mail import relaymanager
@@ -54,7 +56,7 @@ from twisted.internet import reactor
 from twisted.web.http import OK, NOT_FOUND, PARTIAL_CONTENT
 from twisted.application.service import Service
 
-from core.db import sqlite
+from core.db import messages, tos
 from core.dirs import tmp
 from core.constants import DEBUG, DEBUG_SENDER, CHARSET
 from core.utils import sleep
@@ -65,7 +67,7 @@ from core.http import Headers, HttpAgent, BufferProtocol, FileProtocol, ContentD
 
 class SenderService(Service):
 
-	queueWorkers = 1
+	queueWorkers = config.getint('sender', 'workers')
 	queueInterval = 1
 	queueRunning = False
 	queueStop = object()
@@ -241,77 +243,33 @@ class SenderService(Service):
 
 					@inlineCallbacks
 					def _c(timeout=1, self=self):
-						rows = (yield sqlite.runQuery(
-							"SELECT rowid, message_id, group_id, email, name, parts FROM queue_to ORDER BY priority, rowid LIMIT 0, {0}".format(self.queueWorkers * 5)
-						))
+						row = tos.pop()
+						row = row if row else None
 
-						if not rows:
+						if not row:	
 							# Sleep
 							yield sleep(self.senderIntervalEmpty)
 						else:
-							queues = []
-							delete = []
+							try:
+								# Get message
+								row.message = messages.get(row.message)
+								row.priority = 0
+								row.retries -= 1
 
-							for row in rows:
-								rowId = row[0]
-								rowMessage = row[1]
-								rowGroup = row[2]
-								rowTime = None
+								# Add to queue
+								self.queuePut(row)
+							except Exception, e:
+								traceback = sys.exc_info()[2]
 
-								try:
-									# Get message
-									message = (yield sqlite.runQuery(
-										"SELECT subject, text, html, params FROM queue_messages WHERE rowid = ? LIMIT 1",
-										(rowMessage, )
-									))
+								if not traceback:
+									traceback = None
 
-									if not message:
-										# Fallback
-										raise RuntimeError('Message {0} not found'.format(rowMessage))
-									else:
-										message = (dict(
-											id=rowMessage,
-											subject=message[0][0],
-											text=message[0][1],
-											html=message[0][2],
-											params=loads(message[0][3])
-										))
+								if row.retries > 0:
+									# Fallback
+									pass
 
-									row = (dict(
-										id=rowId,
-										message=message,
-										group=row[2] if row[2] else None,
-										email=row[3],
-										name=row[4],
-										parts=loads(row[5]),
-									))
-								except Exception, e:
-									traceback = sys.exc_info()[2]
-
-									if not traceback:
-										traceback = None
-
-									if rowGroup:
-										# Update group counters
-										(yield sqlite.runOperation(
-											"UPDATE queue_groups SET wait = (wait - 1), errors = (errors + 1) WHERE rowid = ?",
-											(rowGroup, )
-										))
-
-									# Throw
-									raise e, None, traceback
-
-								queues.append(row)
-								delete.append(str(rowId))
-
-							# Remove from queue
-							(yield sqlite.runOperation(
-								"DELETE FROM queue_to WHERE rowid IN({0})".format(','.join(delete)),
-							))
-
-							# Add to queue
-							for queue in queues:
-								self.queuePut(queue)
+								# Throw
+								raise e, None, traceback
 
 					def _e(result, self=self):
 						err(result)
@@ -374,7 +332,7 @@ class SenderService(Service):
 
 			# Debug
 			(msg(self.name,
-				'queueProcess item', item['id'], system='-'))
+				'queueProcess item', item.id, 'retries', item.retries, system='-'))
 
 			try:
 				# Data mail
@@ -382,9 +340,9 @@ class SenderService(Service):
 				current = dict()
 
 				# From email
-				if 'from' in item['message']['params'] and isinstance(item['message']['params']['from'], DictType):
-					current['fEmail'] = item['message']['params']['from']['email']
-					current['fNames'] = item['message']['params']['from']['name']
+				if isinstance(item.message.sender, DictType):
+					current['fEmail'] = item.message.sender['email']
+					current['fNames'] = item.message.sender['name']
 
 					if not isinstance(current['fNames'], UnicodeType):
 						current['fNames'] = current['fNames'].decode(charsetIn, 'replace')
@@ -393,36 +351,21 @@ class SenderService(Service):
 					raise RuntimeError('Wow! Wrong from {0}'.format(repr(item)))
 
 				# To email
-				if item['name']:
-					current['tEmail'] = item['email']
-					current['tNames'] = item['name']
+				if item.name:
+					current['tEmail'] = item.email
+					current['tNames'] = item.name
 
 					if not isinstance(current['tNames'], UnicodeType):
 						current['tNames'] = current['tNames'].decode(charsetIn, 'replace')
 				else:
-					current['tEmail'] = item['email']
+					current['tEmail'] = item.email
 					current['tNames'] = None
 
-				# Reply-To email
-				if 'reply-to' in item['message']['params'] and item['message']['params']['reply-to']:
-					if isinstance(item['message']['params']['reply-to'], DictType):
-						current['rEmail'] = item['message']['params']['reply-to']['email']
-						current['rNames'] = item['message']['params']['reply-to']['name']
-
-						if not isinstance(current['rNames'], UnicodeType):
-							current['rNames'] = current['rNames'].decode(charsetIn, 'replace')
-					else:
-						current['rEmail'] = item['message']['params']['reply-to']
-						current['rNames'] = None
-				else:
-					current['rEmail'] = None
-					current['rNames'] = None
-
 				current['body'] = MIMEMultipart('related')
-				# current['body']['X-Sender'] = 'mail-services'
+				current['body'].set_charset(charsetMessage)
 
-				if item['message']['subject']:
-					current['subject'] = item['message']['subject']
+				if item.message.subject:
+					current['subject'] = item.message.subject
 
 					if not isinstance(current['subject'], UnicodeType):
 						current['subject'] = text.decode('utf8', 'replace')
@@ -443,24 +386,24 @@ class SenderService(Service):
 				else:
 					current['body']['To'] = current['tEmail']
 
-				if current['rEmail']:
-					if current['rNames']:
-						current['body']['Reply-To'] = ('%s <%s>' % (
-							Header(current['rNames'], charsetMessage),
-							current['rEmail']
-						))
-					else:
-						current['body']['Reply-To'] = current['rEmail']
+				# if current['rEmail']:
+				# 	if current['rNames']:
+				# 		current['body']['Reply-To'] = ('%s <%s>' % (
+				# 			Header(current['rNames'], charsetMessage),
+				# 			current['rEmail']
+				# 		))
+				# 	else:
+				# 		current['body']['Reply-To'] = current['rEmail']
 
-				current['body'].add_header('Message-ID', '<%s-%s@%s>' % (
-					id, item['id'], 'localhost'
+				current['body'].add_header('Message-ID', '%s' % (
+					make_msgid('{0}-{1}'.format(id, item.id))
 				))
 
 				current['parts'] = []
 
 				# Get messages
-				current['html'] = item['message'].pop('html')
-				current['text'] = item['message'].pop('text')
+				current['html'] = item.message.html
+				current['text'] = item.message.text
 
 				if current['text']:
 					if not isinstance(current['text'], UnicodeType):
@@ -469,6 +412,32 @@ class SenderService(Service):
 				if current['html']:
 					if not isinstance(current['html'], UnicodeType):
 						current['html'] = current['html'].decode(charsetIn, 'replace')
+
+				# Replace parts
+				for part in (('name', 'tNames'), ('email', 'tEmail')):
+					key = '{{:{0}:}}'.format(part[0])
+					value = current[part[1]]
+
+					if current['text']:
+						current['text'] = current['text'].replace(key, value)
+
+					if current['html']:
+						current['html'] = current['html'].replace(key, value)
+
+				if item.parts:
+					for part, value in item.parts.iteritems():
+						key = '{{:{0}:}}'.format(part)
+						
+						if not isinstance(value, StringTypes):
+							value = str(value)
+						elif not isinstance(value, UnicodeType):
+							value = value.decode(charsetIn, 'replace')
+
+						if current['text']:
+							current['text'] = current['text'].replace(key, value)
+
+						if current['html']:
+							current['html'] = current['html'].replace(key, value)
 
 				# Attach images
 				if config.getboolean('sender', 'attach-images'):
@@ -492,7 +461,7 @@ class SenderService(Service):
 
 							if DEBUG:
 								(msg(self.name,
-									'queueProcess item', item['id'], 'download images', len(images), 'sources', len(images_url), system='-'))
+									'queueProcess item', item.id, 'download images', len(images), 'sources', len(images_url), system='-'))
 
 							# Clean
 							del images_url
@@ -505,17 +474,36 @@ class SenderService(Service):
 									# Skip errors
 									continue
 
-								# Replace in content
-								for source in images[i][1]:
-									current['html'] = current['html'].replace(source['source'], '{type}={separator}{info[url]}{separator}'.format(
-										type=source['type'], 
-										separator=source['separator'],
-										**result
-									))
+								if DEBUG:
+									(msg(self.name,
+										'queueProcess item', item.id, 'download images', 'image', i, result, system='-'))
+
+								if result:
+									with open(result['file'], 'rb') as fp:
+										image = MIMEImage(fp.read(), result['info']['type'][1])
+										image.add_header('Content-ID', '<{0}>'.format(result['info']['hash']))
+
+										if result['info']['extension'] is not None:
+											image.add_header('Content-Disposition', 'inline', filename='{0}{1}'.format(
+												result['info']['hash'], 
+												result['info']['extension']
+											))
+										else:
+											image.add_header('Content-Disposition', 'inline')
+
+									current['parts'].append(image)
+
+									# Replace in content
+									for source in images[i][1]:
+										current['html'] = current['html'].replace(source['source'], '{type}={separator}cid:{info[hash]}{separator}'.format(
+											type=source['type'], 
+											separator=source['separator'],
+											**result
+										))
 
 							if DEBUG:
 								(msg(self.name,
-									'queueProcess item', item['id'], 'download images', 'ok', system='-'))
+									'queueProcess item', item.id, 'download images', 'ok', system='-'))
 
 				if current['text'] and current['html']:
 					message = MIMEMultipart('alternative')
@@ -546,16 +534,21 @@ class SenderService(Service):
 				contextFactory = ClientContextFactory()
 				contextFactory.method = SSLv3_METHOD
 
-				file = StringIO(str(current['body'].as_string()))
+				file = StringIO()
 				file.seek(0)
 
-				# if DEBUG:
-				# 	(msg(self.name,
-				# 		'queueProcess item', item['id'], file.getvalue(), current, system='-'))
+				g = Generator(file, mangle_from_=True)
+				g.flatten(current['body'])
 
-				# Clean
-				del current
-				del id
+				if DEBUG:
+					file.seek(0)
+					file.seek(0)
+
+					(msg(self.name,
+						'queueProcess item', item.id, 'data', file.read(), current, system='-'))
+				
+				file.seek(0)
+				file.seek(0)
 
 				if DEBUG_SENDER:
 					deferred.callback('OK')
@@ -569,6 +562,7 @@ class SenderService(Service):
 						file=file,
 						contextFactory=False,
 						requireTransportSecurity=False,
+						requireAuthentication=bool(config.get('smtp', 'username')),
 						retries=3,
 						timeout=10,
 					))
@@ -589,36 +583,46 @@ class SenderService(Service):
 							timeout=10,
 						))
 
-				result = ((yield deferred))
+				# Clean
+				del current
+				del id
 
-				if item['group']:
-					# Update group counters
-					(yield sqlite.runOperation(
-						"UPDATE queue_groups SET wait = (wait - 1), sent = (sent + 1) WHERE rowid = ?",
-						(item['group'], )
-					))
+				result = ((yield deferred))
 
 				# Debug
 				(msg(self.name,
-					'queueProcess item', item['id'], 'sent', repr(result), system='-'))
+					'queueProcess item', item.id, 'sent', repr(result), system='-'))
 			except Exception, e:
 				err()
 
+				if item.retries > 0:
+					# Fallback
+					pass
+
 				# Debug
 				(msg(self.name,
-					'queueProcess item', item['id'], 'fallback', system='-'))
-
-				if item['group']:
-					# Update group counters
-					(yield sqlite.runOperation(
-						"UPDATE queue_groups SET wait = (wait - 1), errors = (errors + 1) WHERE rowid = ?",
-						(item['group'], )
-					))
+					'queueProcess item', item.id, 'fallback', system='-'))
 		finally:
 			self._process -= 1
 
 	_current_download = dict()
 	_current_download_urls = set()
+
+	_allow_content_types = ((
+		('image', 'png'),
+		('image', 'jpg'),
+		('image', 'jpeg'),
+		('image', 'gif'),
+		('image', 'bmp'),
+	))
+
+	_allow_content_types_to_extension = dict((
+		(0, '.png'),
+		(1, '.jpg'),
+		(2, '.jpg'),
+		(3, '.gif'),
+		(4, '.bmp'),
+	))
 
 	@inlineCallbacks
 	def downloadToTemporary(self, url):
@@ -693,38 +697,55 @@ class SenderService(Service):
 						contentType = contentType.split(';').pop(0)
 						contentType = contentType.split('/')
 						contentType = map(lambda row: str(row), contentType)
+						contentType = tuple(contentType)
 
 					if not contentType or not len(contentType) == 2:
 						# Wrong
 						raise RuntimeError('Wrong content type "{0}"'.format(contentType))
 
-					with open(fileTmp, 'wb') as fp:
-						transfer = Deferred()
-						protocol = FileProtocol(transfer, fp)
+					if contentType in self._allow_content_types:
+						with open(fileTmp, 'wb') as fp:
+							transfer = Deferred()
+							protocol = FileProtocol(transfer, fp)
 
-						response.deliverBody(protocol)
+							response.deliverBody(protocol)
 
-						# Fetch file
-						((yield transfer))
+							# Fetch file
+							((yield transfer))
 
-					# Move tmp file to normal
-					os.rename(fileTmp, file)
+						# Move tmp file to normal
+						os.rename(fileTmp, file)
 
-					# File info
-					info = (dict(
-						url=url,
-						type=contentType,
-					))
+						# File info
+						info = (dict(
+							url=url,
+							type=contentType,
+							hash=hash,
+							extension=self._allow_content_types_to_extension.get(
+								self._allow_content_types.index(contentType)),
+						))
 
-					# Write file info
-					with open(fileInf, 'wb') as fp:
-						fp.write(dumps(info))
+						# Write file info
+						with open(fileInf, 'wb') as fp:
+							fp.write(dumps(info))
 
-					# Success
-					success = (dict(
-						file=file,
-						info=info,
-					))
+						# Success
+						success = (dict(
+							file=file,
+							info=info,
+						))
+					else:
+						if DEBUG:
+							(msg(self.name,
+								'downloadToTemporary',
+								'url', 
+								repr(url), 
+								'hash', 
+								repr(hash), 
+								'unknown content type', 
+								contentType, 
+								system='-'
+							))
 
 					if self._current_download[hash]:
 						self._current_download[hash].callback(success)

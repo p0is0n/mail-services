@@ -33,14 +33,14 @@ class ESMTPSender(_ESMTPSender):
 
 	def lineReceived(self, line):
 		if DEBUG:
-			msg(self, 'SMTP <<<', repr(line))
+			msg('ESMTPSender', 'SMTP <<<', repr(line))
 
 		# Success
 		return _ESMTPSender.lineReceived(self, line)
 
 	def sendLine(self, line):
 		if DEBUG:
-			msg(self, 'SMTP >>>', repr(line))
+			msg('ESMTPSender', 'SMTP >>>', repr(line))
 
 		# Success
 		return _ESMTPSender.sendLine(self, line)

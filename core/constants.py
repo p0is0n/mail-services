@@ -29,7 +29,7 @@ from core.dirs import root
 
 
 DEBUG = config.debugMode()
-DEBUG_SENDER = True
+DEBUG_SENDER = False
 DEBUG_DUMPS = False
 
 CHARSET = 'utf8'

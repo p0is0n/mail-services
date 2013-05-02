@@ -17,153 +17,319 @@
 # along with Mail-Services.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
-import time
-import sqlite3
+import os
+
+from marshal import dump as mdump, load as mload
+from itertools import count
+from heapq import heappush, heappop, heapify
+from collections import deque
+from time import time
 
 from twisted.python import log
-from twisted.enterprise.adbapi import ConnectionPool as AConnectionPool
 from twisted.internet import reactor
 from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.internet.address import IPv4Address, UNIXAddress
+from twisted.internet.task import LoopingCall
 
 from core.constants import DEBUG
 from core.configs import config
+from core.dirs import dbs, tmp
+from core.mappers import Message, To, Group
 
 
-class SqliteConnectionPool(AConnectionPool):
+class Base:
 
-	noisy = DEBUG
-	reconnect = True
+	def __init__(self, name):
+		self.name = name
+		
+		self.next = self.counter(1)
+		self.data = self.empty()
+		self.file = dbs('{0}.db'.format(self.name))
 
-	min = 1 # minimum number of connections in pool
-	max = 1 # maximum number of connections in pool
+		self.changesOne = 0
+		self.changesAll = 0
 
-	timeoutConnections = None
+		self.lastSyncTime = time()
 
-	def __init__(self, *a, **k):
-		AConnectionPool.__init__(self, 'sqlite3', *a, **k)
+	@property
+	def id(self):
+		return self.next.next()
 
-	def connect(self):
-		"""Return a database connection when one becomes available.
+	def load(self):
+		raise NotImplementedError
 
-		This method blocks and should be run in a thread from the internal
-		threadpool. Don't call this method directly from non-threaded code.
-		Using this method outside the external threadpool may exceed the
-		maximum number of connections in the pool.
+	def save(self):
+		raise NotImplementedError
 
-		@return: a database connection from the pool.
-		"""
+	def empty(self):
+		raise NotImplementedError
 
-		if self.timeoutConnections is None:
-			self.timeoutConnections = dict()
+	def counter(self, start):
+		return count(start, step=1)
 
-		tid = self.threadID()
+	def startSync(self):
+		self.loopingSync = LoopingCall(self.sync)
+		self.loopingSync.start(60, True)
 
-		# Try get connection
-		connection = self.connections.get(tid)
-		if connection is None:
-				if self.noisy:
-					log.msg('adbapi connecting: %s %s%s' % (self.dbapiName,
-							self.connargs or '',
-							self.connkw or ''))
+	def stopSync(self):
+		self.loopingSync.stop()
+		self.loopingSync = None
 
-				connection = self.dbapi.connect(*self.connargs, **self.connkw)
-				if self.openfun != None:
-						self.openfun(connection)
-
-				self.connections[tid] = connection
-
-				if self.noisy:
-					log.msg('adbapi connected: %s' % (self.dbapiName))
+	def sync(self):
+		mark = time()
+		last = self.lastSyncTime
 
 		try:
-			self.timeoutConnections[tid].cancel()
+			for seconds, changes in config.dbSync():
+				if self.changesOne >= changes:
+					if last <= (mark - seconds):
+						log.msg(self, 'sync', seconds, changes)
 
-			if self.noisy:
-				log.msg('adbapi timeout: reset for tid', tid)
-		except KeyError:
-			# Continue error
-			pass
+						# @TODO: This code block all main-loop, fix-it
+						self.save()
 
-		inactive = config.getfloat('db', 'inactive')
-		if inactive:
-			self.timeoutConnections[tid] = reactor.callLater(inactive,
-				self.timeoutConnection, tid)
+						log.msg(self, 'sync', 'ok')
+
+						# Update
+						self.changesOne = 0
+						self.lastSyncTime = mark
+
+						# Exit
+						break
+		except:
+			log.err()
+
+	def __str__(self):
+		return 'DB-{0}'.format(self.name)
+
+
+class Messages(Base):
+
+	def __init__(self):
+		Base.__init__(self, 'messages')
+
+	def add(self, message):
+		assert isinstance(message, Message)
+
+		# Create id if needed
+		if message.id is None:
+			id = self.id
+		else:
+			id = message.id
+			
+			# Update id
+			if id > self.id:
+				self.next = self.counter(id)
+
+		# Insert
+		self.data[id] = message
+
+		# Update
+		message.id = id
+
+		# Changes
+		self.changesOne += 1
+		self.changesAll += 1
 
 		# Success
-		return connection
+		return id
 
-	def timeoutConnection(self, tid):
-		del self.timeoutConnections[tid]
+	def get(self, id):
+		return self.data.get(id)
 
-		# Try get connection
-		connection = self.connections.get(tid)
-		if connection is None:
-			log.msg('adbapi timeout: connection for tid', tid, 'not found')
+	def empty(self):
+		return dict()
 
-			# Fail
-			return
+	def load(self):
+		log.msg(self, 'load')
 
-		self._close(connection)
+		if os.path.exists(self.file):
+			# Load
+			with open(self.file, 'rb') as fp:
+				next, data = mload(fp)
 
-		try:
-			del self.connections[tid]
-		except KeyError:
-			# Continue error
-			pass
+				log.msg(self, 'load', len(data))
 
-		log.msg('adbapi timeout: connection for tid', tid)
+				self.next = self.counter(next)
+				self.data = dict(((message['id'], Message.fromDict(message)) for message in data))
 
-	def openfun(self, connection):
-		cursor = connection.cursor()
+		log.msg(self, 'load ok')
 
-		try:
-			cursor.execute("PRAGMA journal_mode=MEMORY")
-			cursor.execute("PRAGMA temp_store=MEMORY")
-			cursor.execute("PRAGMA synchronous=OFF")
+	def save(self):
+		log.msg(self, 'save')
+		log.msg(self, 'save', len(self.data))
 
-			# Close
-			cursor.close()
-		except:
-			 log.err()
+		# Save
+		with open(self.file, 'wb') as fp:
+			mdump((self.next.next(), tuple(message.toDict() for id, message in self.data.iteritems())), fp)
 
-	def _runInteraction(self, interaction, *args, **kwargs):
-		connection = self.connectionFactory(self)
-		transaction = self.transactionFactory(self, connection)
+		log.msg(self, 'save ok')
 
-		try:
-			result = (interaction(
-				transaction,
-				*args,
-				**kwargs
+
+class Tos(Base):
+
+	def __init__(self):
+		Base.__init__(self, 'tos')
+
+	def add(self, to):
+		assert isinstance(to, To)
+
+		# Create id if needed
+		if to.id is None:
+			id = self.id
+		else:
+			id = to.id
+
+			# Update id
+			if id > self.id:
+				self.next = self.counter(id)
+
+		# Insert
+		if to.priority > 0:
+			(heappush(
+				self.data[1], 
+				(to.priority, to)
 			))
+		else:
+			self.data[0].append(to)
 
-			connection.commit()
+		# Update
+		to.id = id
 
-			# Success
-			return result
-		except:
-			excType, excValue, excTraceback = sys.exc_info()
+		# Changes
+		self.changesOne += 1
+		self.changesAll += 1
 
-			try:
-				connection.rollback()
-			except:
-				log.err(None, "Rollback failed")
+		# Success
+		return id
 
-			raise excType, excValue, excTraceback
-		finally:
-			transaction.close()
+	def pop(self):
+		if self.data[1]:
+			# Changes
+			self.changesOne += 1
+			self.changesAll += 1
 
-	def _runOperation(self, transaction, *a, **k):
-		transaction.execute(*a, **k)
+			return heappop(self.data[1])[1]
 
-		# Success, return result with query params
-		return dict(affected_rows=transaction.rowcount,
-			insert_id=transaction.lastrowid)
+		if self.data[0]:
+			# Changes
+			self.changesOne += 1
+			self.changesAll += 1
+
+			return self.data[0].pop()
+
+	def empty(self):
+		return (deque(), [])
+
+	def load(self):
+		log.msg(self, 'load')
+
+		if os.path.exists(self.file):
+			# Load
+			with open(self.file, 'rb') as fp:
+				next, data = mload(fp)
+
+				log.msg(self, 'load', len(data[0]), len(data[1]))
+
+				self.next = self.counter(next)
+				self.data = (deque(tuple(To.fromDict(to) for to in data[0])), [(priority, To.fromDict(to)) for priority, to in data[1]])
+
+				# Transform list into a heap, in-place, in linear time.
+				heapify(self.data[1])
+
+		log.msg(self, 'load ok')
+
+	def save(self):
+		log.msg(self, 'save')
+		log.msg(self, 'save', len(self.data[0]), len(self.data[1]))
+
+		# Save
+		with open(self.file, 'wb') as fp:
+			mdump((self.next.next(), ( tuple(to.toDict() for to in self.data[0]), tuple((priority, to.toDict()) for priority, to in self.data[1]) )), fp)
+
+		log.msg(self, 'save ok')
 
 
-sqlite = (SqliteConnectionPool(
-	check_same_thread=False,
-	database=config.get('db', 'database'),
-	detect_types=sqlite3.PARSE_DECLTYPES
-))
+class Groups(Base):
+
+	def __init__(self):
+		Base.__init__(self, 'groups')
+
+	def add(self, group):
+		assert isinstance(group, Group)
+
+		# Create id if needed
+		if group.id is None:
+			id = self.id
+		else:
+			id = group.id
+
+			# Update id
+			if id > self.id:
+				self.next = self.counter(id)
+
+		# Insert
+		self.data[id] = group
+
+		# Update
+		group.id = id
+
+		# Changes
+		self.changesOne += 1
+		self.changesAll += 1
+
+		# Success
+		return id
+
+	def get(self, id):
+		return self.data.get(id)
+
+	def empty(self):
+		return dict()
+
+	def load(self):
+		log.msg(self, 'load')
+
+		if os.path.exists(self.file):
+			# Load
+			with open(self.file, 'rb') as fp:
+				next, data = mload(fp)
+
+				log.msg(self, 'load', len(data))
+
+				self.next = self.counter(next)
+				self.data = dict(((group['id'], Group.fromDict(group)) for group in data))
+
+		log.msg(self, 'load ok')
+
+	def save(self):
+		log.msg(self, 'save')
+		log.msg(self, 'save', len(self.data))
+
+		# Save
+		with open(self.file, 'wb') as fp:
+			mdump((self.next.next(), tuple(group.toDict() for id, group in self.data.iteritems())), fp)
+
+		log.msg(self, 'save ok')
+
+
+messages = Messages()
+tos = Tos()
+groups = Groups()
+
+# Handlers
+reactor.addSystemEventTrigger('before', 'startup', messages.load)
+reactor.addSystemEventTrigger('before', 'startup', tos.load)
+reactor.addSystemEventTrigger('before', 'startup', groups.load)
+
+reactor.addSystemEventTrigger('after', 'shutdown', messages.save)
+reactor.addSystemEventTrigger('after', 'shutdown', tos.save)
+reactor.addSystemEventTrigger('after', 'shutdown', groups.save)
+
+reactor.addSystemEventTrigger('after', 'startup', messages.startSync)
+reactor.addSystemEventTrigger('after', 'startup', tos.startSync)
+reactor.addSystemEventTrigger('after', 'startup', groups.startSync)
+
+reactor.addSystemEventTrigger('before', 'shutdown', messages.stopSync)
+reactor.addSystemEventTrigger('before', 'shutdown', tos.stopSync)
+reactor.addSystemEventTrigger('before', 'shutdown', groups.stopSync)

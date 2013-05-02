@@ -38,9 +38,10 @@ from twisted.internet.endpoints import serverFromString
 from twisted.application.internet import StreamServerEndpointService as Service
 from twisted.protocols.basic import Int32StringReceiver
 
-from core.db import sqlite
+from core.db import messages, tos, groups
 from core.dirs import tmp
 from core.constants import DEBUG, DEBUG_DUMPS, CHARSET
+from core.mappers import Message, To, Group
 
 
 class ReceiverError(Exception):
@@ -50,6 +51,7 @@ class ReceiverError(Exception):
 class ReceiverProtocol(Int32StringReceiver):
 
 	MAX_LENGTH = 999999
+	COMMANDS_MASK = 'commands_{0}'.format
 
 	def connectionMade(self):
 		if DEBUG:
@@ -69,10 +71,14 @@ class ReceiverProtocol(Int32StringReceiver):
 			))
 
 	def send(self, data):
-		self.sendString(dumps(data))
+		if DEBUG_DUMPS:
+			(msg(
+				self.factory.service.name,
+				'send',
+				repr(data)
+			))
 
-	def sendError(self, error, id=None):
-		self.send(dict(error=error, id=id))
+		self.sendString(dumps(data))
 
 	def stringReceived(self, data):
 		if DEBUG_DUMPS:
@@ -101,187 +107,199 @@ class ReceiverProtocol(Int32StringReceiver):
 			try:
 				itemId = str(item.get('id', self.sequence))
 				itemCommand = item['command']
-				itemTest = bool(item.get('test'))
 
-				if itemCommand == 'mail':
-					itemType = item.get('type', 'single')
-					itemGroup = int(item.get('group')) if item.has_key('group') else None
-
-					counts = (dict(
-						all=0,
-						queued=0
-					))
-
-					if itemType == 'single' or itemType == 'multiple':
-						# Check
-						if not isinstance(item['to'], (ListType, TupleType)):
-							item['to'] = [item['to']]
-
-						for to in item['to']:
-							if not isinstance(to, DictType):
-								raise ReceiverError('Value "to" must be dictonary type')
-
-							if (not to['email']) or (not to['name']) or (int(to.get('priority', 0)) < 0):
-								raise ReceiverError('Value "to" must have "email" and "name" fields')
-
-							# Create parts
-							if not 'parts' in to:
-								to['parts'] = dict()
-
-							if not isinstance(to['parts'], DictType):
-								raise ReceiverError('Value "parts" in "to" must be dictonary type')
-
-						if not isinstance(item['message'], DictType):
-							raise ReceiverError('Value "message" must be dictonary type')
-
-						if (not item['message'].get('subject')):
-							raise ReceiverError('Value "message" must be contains "subject" field')
-
-						if (not item['message'].get('html')) and (not item['message'].get('text')):
-							raise ReceiverError('Value "message" must be contains "html" and/or "text" fields')
-
-						if (not item['message'].get('from')):
-							raise ReceiverError('Value "message" must be contains "from" field')
-
-						if not isinstance(item['message']['from'], DictType):
-							raise ReceiverError('Value "message" field "from" must be dictonary type')
-
-						if item.get('headers') and not isinstance(item['headers'], DictType):
-							raise ReceiverError('Value "headers" must be dictonary type')
-
-						def _(transaction, item):
-							messageId = None
-							messageParams = dict((
-								('from', dict(
-									name=item['message']['from']['name'], 
-									email=item['message']['from']['email']
-								)),
-							))
-
-							if item.get('headers'):
-								messageParams['headers'] = item['headers']
-							else:
-								messageParams['headers'] = dict()
-
-							if itemGroup:
-								# Check group
-								result = (transaction.execute(
-									"SELECT id FROM queue_groups WHERE id = ?",
-									((
-										itemGroup,
-									))
-								))
-
-								result = transaction.fetchall()
-								result = result[0] if result else None
-
-								if result is None:
-									# Insert group
-									(transaction.execute(
-										"INSERT INTO queue_groups (id) VALUES (?)",
-										((
-											itemGroup,
-										))
-									))
-
-							(transaction.execute(
-								"INSERT INTO queue_messages (subject, text, html, create_time, params) VALUES (?, ?, ?, ?, ?)",
-								((
-									item['message']['subject'],
-									item['message'].get('text'),
-									item['message'].get('html'),
-									int(time()),
-									dumps(messageParams)
-								))
-							))
-
-							# Insert multi
-							b = 100
-							l = item['to']
-							c = len(l)
-							i = transaction.lastrowid
-
-							for j in xrange(0, c, b):
-								k = islice(l, j, j + b)
-								h = min(b, (j + b - (b - (c - j))) - j)
-
-								(transaction.execute(
-									("INSERT INTO queue_to {0}".format(
-										' UNION '.join( (("SELECT ? AS message_id, ? AS group_id, ? AS email, ? AS name, strftime('%s', 'now') AS create_time, ? AS parts, ? AS priority", ) * h) )
-									)),
-									tuple(chain(
-										*((i, itemGroup, to['email'], to['name'], dumps(to['parts']), to.get('priority', 0)) for to in k)
-									))
-								))
-
-								counts['all'] += h
-								counts['queued'] += h
-
-							if counts['queued'] > 0:
-								# Update group
-								(transaction.execute(
-									"UPDATE queue_groups SET wait = (wait + ?) WHERE id = ?",
-									((
-										counts['queued'],
-										itemGroup,
-									))
-								))
-
-						if not itemTest:
-							(yield sqlite.runInteraction(_, item=item))
-						else:
-							# Run as test, with out updates
-							(yield None)
-
-						self.send(dict(
-							counts=counts,
-							id=itemId,
-						))
-					else:
-						# Error, unknown type
-						self.sendError(
-							error='Unknown type "{0}"'.format(itemType),
-							id=itemId,
-						)
-
-				elif itemCommand == 'group':
-					itemGroup = item['group'] if item.has_key('group') else item['groups']
-					itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
-					itemGroup = map(str, map(int, itemGroup))
-					
-					result = dict()
-					groups = (yield sqlite.runQuery(
-						"SELECT id, wait, sent, errors FROM queue_groups WHERE id IN({0})".format(','.join(itemGroup)),
-					))
-
-					for group in groups:
-						result[group[0]] = (dict(
-							wait=group[1],
-							sent=group[2],
-							errors=group[3],
-						))
-
-					self.send(dict(
-						groups=result,
-						id=itemId,
-					))
-
+				(yield self.commands(itemId, itemCommand, item))
 			except ReceiverError, e:
-				# Send error to client
-				self.sendError(
+				self.send(dict(
 					error=e.message,
 					id=itemId,
-				)
-			except Exception, e:
+				))
+			except:
 				err()
 
-				# Send error to client
-				self.sendError(
+				self.send(dict(
 					error='Unknown error, please check you params',
 					id=itemId,
-				)
+				))
 		finally:
 			self.factory.service._workers -= 1
+
+	def commands(self, id, command, item):
+		return (getattr(self, self.COMMANDS_MASK(command), self.commands_default)(
+			id,
+			item
+		))
+
+	def commands_default(self, id, item):
+		return fail(ReceiverError('Unknown command'))
+
+	def commands_group(self, id, item):
+		itemGroup = item['group'] if item.has_key('group') else item['groups']
+		itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
+		itemGroup = map(int, itemGroup)
+					
+		self.send(dict(
+			groups=dict(((group.id, group.toDict()) for group in map(groups.get, itemGroup) if group)),
+			id=id,
+		))
+
+	def commands_message(self, id, item):
+		itemType = 'stats' if item.has_key('ids') else 'insert'
+		itemMessage = item['ids'] if itemType == 'stats' else None
+					
+		if itemType == 'insert':
+			response = (dict(
+				id=id
+			))
+
+			if not isinstance(item['message'], DictType):
+				raise ReceiverError('Value "message" must be dictonary type')
+
+			if (not item['message'].get('subject')):
+				raise ReceiverError('Value "message" must be contains "subject" field')
+
+			if (not item['message'].get('html')) and (not item['message'].get('text')):
+				raise ReceiverError('Value "message" must be contains "html" and/or "text" fields')
+
+			if (not item['message'].get('sender')):
+				raise ReceiverError('Value "message" must be contains "sender" field')
+
+			if not isinstance(item['message']['sender'], DictType):
+				raise ReceiverError('Value "message" field "sender" must be dictonary type')
+
+			if item['message'].get('headers') and not isinstance(item['message']['headers'], DictType):
+				raise ReceiverError('Value "message" field "headers" must be dictonary type')
+
+			message = Message.fromDict(dict(id=messages.id, **item['message']))
+			message.params = dict((
+
+			))
+
+			if item['message'].get('headers'):
+				message.params['headers'] = item['message']['headers']
+			else:
+				message.params['headers'] = dict()
+
+			response['message'] = (dict(
+				id=messages.add(message),
+			))
+
+			self.send(response)
+		else:
+			self.send(dict(
+				error='Unknown type "{0}"'.format(itemType),
+				id=itemId,
+			))
+
+	def commands_mail(self, id, item):
+		itemType = item.get('type', 'single')
+		itemGroup = int(item.get('group')) if (item.has_key('group') and item['group']) else None
+
+		response = (dict(
+			counts = (dict(
+				all=0,
+				queued=0
+			)),
+			id=id
+		))
+
+		if itemType == 'single' or itemType == 'multiple':
+			# Check
+			if not 'to' in item:
+				raise ReceiverError('Value "to" missing')
+
+			if not isinstance(item['to'], (ListType, TupleType)):
+				item['to'] = [item['to']]
+
+			for to in item['to']:
+				if not isinstance(to, DictType):
+					raise ReceiverError('Value "to" must be dictonary type')
+
+				if (not to['email']) or (not to['name']) or (int(to.get('priority', 0)) < 0):
+					raise ReceiverError('Value "to" must have "email" and "name" fields')
+
+				# Create parts
+				if not 'parts' in to:
+					to['parts'] = dict()
+
+				if not isinstance(to['parts'], DictType):
+					raise ReceiverError('Value "parts" in "to" must be dictonary type')
+
+			if not isinstance(item['message'], DictType):
+				raise ReceiverError('Value "message" must be dictonary type')
+
+			if not 'id' in item['message']:
+				if (not item['message'].get('subject')):
+					raise ReceiverError('Value "message" must be contains "subject" field')
+
+				if (not item['message'].get('html')) and (not item['message'].get('text')):
+					raise ReceiverError('Value "message" must be contains "html" and/or "text" fields')
+
+				if (not item['message'].get('from')):
+					raise ReceiverError('Value "message" must be contains "from" field')
+
+				if not isinstance(item['message']['from'], DictType):
+					raise ReceiverError('Value "message" field "from" must be dictonary type')
+
+				if item['message'].get('headers') and not isinstance(item['message']['headers'], DictType):
+					raise ReceiverError('Value "message" field "headers" must be dictonary type')
+
+			messageId = item['message']['id'] if 'id' in item['message'] else None
+			messageId = int(messageId) if messageId is not None else 0
+
+			# Create message
+			if messageId is None:
+				message = Message.fromDict(item['message'])
+				message.params = dict((
+
+				))
+
+				if item['message'].get('headers'):
+					message.params['headers'] = item['message']['headers']
+				else:
+					message.params['headers'] = dict()
+
+				# Add to database
+				messageId = messages.add(message)
+
+			if itemGroup:
+				# Check group
+				group = groups.get(itemGroup)
+				if not group:
+					group = Group.fromDict(dict(
+						id=itemGroup,
+					))
+
+					# Add new
+					groups.add(group)
+			else:
+				group = None
+
+			for to in item['to']:
+				to = To.fromDict(to)
+				to.message = messageId
+
+				if group is not None:
+					to.group = group.id
+
+				# Add to database
+				toId = tos.add(to)
+
+				# Counts
+				response['counts']['all'] += 1
+				response['counts']['queued'] += 1
+
+			if response['counts']['queued'] > 0:
+				# Update group
+				if group is not None:
+					group.wait += response['counts']['queued']			
+
+			self.send(response)
+		else:
+			self.send(dict(
+				error='Unknown type "{0}"'.format(itemType),
+				id=itemId,
+			))
 
 
 class ReceiverFactory(ServerFactory):
