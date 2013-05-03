@@ -1,8 +1,5 @@
-Mail-services
-=============
 
-
-Introduction
+Introduction to Mail-services
 ------------
 
 Mail-Services is lite queue for sending many mails.
