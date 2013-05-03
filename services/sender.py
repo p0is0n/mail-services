@@ -243,6 +243,10 @@ class SenderService(Service):
 
 					@inlineCallbacks
 					def _c(timeout=1, self=self):
+						if self.isStarted:
+							# Check after
+							tos.checkAfter()
+
 						row = tos.pop()
 						row = row if row else None
 

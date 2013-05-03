@@ -26,6 +26,7 @@ from math import ceil
 
 from twisted.python.log import msg, err
 from twisted.internet.reactor import callLater
+from twisted.internet import reactor
 
 from core.constants import DEBUG
 from core.dirs import tmp, dbs
@@ -188,7 +189,7 @@ class Message(BaseWithStorage):
 
 			# Default
 			if self.time is None:
-				self.time = int(time())
+				self.time = int(reactor.seconds())
 
 	def toDict(self):
 		return (dict(
@@ -232,6 +233,7 @@ class To(Base):
 	name = None
 	time = None
 	parts = None
+	after = None
 	priority = 0
 	retries = None
 
@@ -243,6 +245,7 @@ class To(Base):
 		'name',
 		'time',
 		'parts',
+		'after',
 		'priority',
 		'retries',
 	))
@@ -257,7 +260,7 @@ class To(Base):
 
 			# Default
 			if self.time is None:
-				self.time = int(time())
+				self.time = int(reactor.seconds())
 
 			if self.retries is None:
 				self.retries = 1
@@ -271,6 +274,7 @@ class To(Base):
 			name=self.name,
 			time=self.time,
 			parts=self.parts,
+			after=self.after,
 			priority=self.priority,
 			retries=self.retries,
 		))
@@ -306,7 +310,7 @@ class Group(Base):
 
 			# Default
 			if self.time is None:
-				self.time = int(time())
+				self.time = int(reactor.seconds())
 
 	def toDict(self):
 		return (dict(

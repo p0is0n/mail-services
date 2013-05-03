@@ -218,12 +218,21 @@ class ReceiverProtocol(Int32StringReceiver):
 				if (not to['email']) or (not to['name']) or (int(to.get('priority', 0)) < 0):
 					raise ReceiverError('Value "to" must have "email" and "name" fields')
 
+				to['priority'] = min(10, int(to.get('priority', 0)))
+				to['priority'] = (-(to['priority'] - 10) + 1) if to['priority'] > 0 else 0
+
 				# Create parts
 				if not 'parts' in to:
 					to['parts'] = dict()
 
 				if not isinstance(to['parts'], DictType):
 					raise ReceiverError('Value "parts" in "to" must be dictonary type')
+
+				if 'delay' in to:
+					to['after'] = int(reactor.seconds() + to['delay'])
+
+					# Clean
+					del to['delay']
 
 			if not isinstance(item['message'], DictType):
 				raise ReceiverError('Value "message" must be dictonary type')

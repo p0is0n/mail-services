@@ -76,7 +76,7 @@ class Base:
 		self.loopingSync = None
 
 	def sync(self):
-		mark = time()
+		mark = reactor.seconds()
 		last = self.lastSyncTime
 
 		try:
@@ -185,7 +185,12 @@ class Tos(Base):
 				self.next = self.counter(id)
 
 		# Insert
-		if to.priority > 0:
+		if to.after is not None:
+			(heappush(
+				self.data[2], 
+				(to.after, to)
+			))
+		elif to.priority > 0:
 			(heappush(
 				self.data[1], 
 				(to.priority, to)
@@ -218,8 +223,59 @@ class Tos(Base):
 
 			return self.data[0].pop()
 
+	def checkAfter(self):
+		if self.data[2]:
+			current = reactor.seconds()
+			rotated= 0
+
+			data = self.data[2]
+
+			if DEBUG:
+				log.msg(self, 'checkAfter', len(data), 'wait', current)
+
+			while data and rotated < 10000:
+				# if DEBUG:
+				# 	log.msg(self, 'checkAfter', len(data), 'wait', current)
+
+				startup, to1 =data[0]
+				if startup <= current:
+					# if DEBUG:
+					# 	log.msg(self, 'checkAfter', 'startup', to1, 'got', startup, current)
+
+					after, to2 = heappop(data)
+
+					# if DEBUG:
+					# 	log.msg(self, 'checkAfter', 'startup', to1, to2, 'rotate')
+
+					if to1 is to2:
+						# Ok, rotate
+						if to2.priority > 0:
+							(heappush(
+								self.data[1], 
+								(to2.priority, to2)
+							))
+						else:
+							self.data[0].append(to2)
+
+						# Changes
+						self.changesOne += 1
+						self.changesAll += 1
+					else:
+						(heappush(
+							data, 
+							(after, to2)
+						))
+
+					rotated += 1
+				else:
+					# Ok, wait time
+					break
+
+			if DEBUG:
+				log.msg(self, 'checkAfter', len(data), 'wait', current, 'rotated', rotated)
+
 	def empty(self):
-		return (deque(), [])
+		return (deque(), [], [])
 
 	def load(self):
 		log.msg(self, 'load')
@@ -229,23 +285,32 @@ class Tos(Base):
 			with open(self.file, 'rb') as fp:
 				next, data = mload(fp)
 
-				log.msg(self, 'load', len(data[0]), len(data[1]))
+				log.msg(self, 'load', len(data[0]), len(data[1]), len(data[2]))
 
 				self.next = self.counter(next)
-				self.data = (deque(tuple(To.fromDict(to) for to in data[0])), [(priority, To.fromDict(to)) for priority, to in data[1]])
+				self.data = ((
+					deque(tuple(To.fromDict(to) for to in data[0])), 
+					[(priority, To.fromDict(to)) for priority, to in data[1]],
+					[(after, To.fromDict(to)) for after, to in data[2]],
+				))
 
-				# Transform list into a heap, in-place, in linear time.
+				# Transform list into a heap
 				heapify(self.data[1])
+				heapify(self.data[2])
 
 		log.msg(self, 'load ok')
 
 	def save(self):
 		log.msg(self, 'save')
-		log.msg(self, 'save', len(self.data[0]), len(self.data[1]))
+		log.msg(self, 'save', len(self.data[0]), len(self.data[1]), len(self.data[2]))
 
 		# Save
 		with open(self.file, 'wb') as fp:
-			mdump((self.next.next(), ( tuple(to.toDict() for to in self.data[0]), tuple((priority, to.toDict()) for priority, to in self.data[1]) )), fp)
+			mdump((self.next.next(), ( 
+				tuple(to.toDict() for to in self.data[0]), 
+				tuple((priority, to.toDict()) for priority, to in self.data[1]),
+				tuple((after, to.toDict()) for after, to in self.data[2]),
+			)), fp)
 
 		log.msg(self, 'save ok')
 
