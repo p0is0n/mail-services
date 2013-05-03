@@ -88,41 +88,92 @@ class ReceiverProtocol(Int32StringReceiver):
 				repr(data)
 			))
 
-		self.sequence += 1
-		self.process(dict( **loads(data) ))
+		# Data json
+		data = (loads(data))
 
-	@inlineCallbacks
+		# Data must be only is dict type
+		assert isinstance(data, DictType)
+
+		self.sequence += 1
+		self.process(data)
+
 	def process(self, item):
 		self.factory.service._workers += 1
 
-		# Try
+		if DEBUG_DUMPS:
+			(msg(
+				self.factory.service.name,
+				'process',
+				item
+			))
+
+		# Default
+		result = None
+		status = 0
+
 		try:
-			if DEBUG_DUMPS:
-				(msg(
-					self.factory.service.name,
-					'process',
-					item
-				))
+			itemId = str(item.get('id', self.sequence))
+			itemCommand = item['command']
 
+			result = (self.commands(
+				itemId,
+				itemCommand,
+				item
+			))
+		except ReceiverError, e:
+			self.send(dict(
+				error=e.message,
+				id=itemId,
+			))
+		except:
+			err()
+
+			self.send(dict(
+				error='Unknown error, please check you params',
+				id=itemId,
+			))
+
+		if result is not None:
 			try:
-				itemId = str(item.get('id', self.sequence))
-				itemCommand = item['command']
+				if isinstance(result, Deferred):
+					result.addCallback(self._cb_process, id=itemId)
+					result.addErrback(self._eb_process, id=itemId)
+				else:
+					raise RuntimeError('Returning a value other than None, return {0}'.format(
+						repr(result)
+					))
+			except Exception, e:
+				traceback = sys.exc_info()[2]
 
-				(yield self.commands(itemId, itemCommand, item))
-			except ReceiverError, e:
-				self.send(dict(
-					error=e.message,
-					id=itemId,
-				))
-			except:
-				err()
+				if not traceback:
+					traceback = None
 
-				self.send(dict(
-					error='Unknown error, please check you params',
-					id=itemId,
-				))
-		finally:
+				self.factory.service._workers -= 1
+
+				# Throw
+				raise e, None, traceback
+		else:
 			self.factory.service._workers -= 1
+
+	def _cb_process(self, result, id):
+		self.factory.service._workers -= 1
+
+	def _eb_process(self, result, id):
+		self.factory.service._workers -= 1
+
+		# Process
+		if result.check(ReceiverError):
+			self.send(dict(
+				error=result.value.message,
+				id=id,
+			))
+		else:
+			err(result)
+
+			self.send(dict(
+				error='Unknown error, please check you params',
+				id=id,
+			))
 
 	def commands(self, id, command, item):
 		return (getattr(self, self.COMMANDS_MASK(command), self.commands_default)(
@@ -133,11 +184,17 @@ class ReceiverProtocol(Int32StringReceiver):
 	def commands_default(self, id, item):
 		return fail(ReceiverError('Unknown command'))
 
+	def commands_ping(self, id, item):
+		self.send(dict(
+			ping='pong',
+			id=id,
+		))
+
 	def commands_group(self, id, item):
 		itemGroup = item['group'] if item.has_key('group') else item['groups']
 		itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
 		itemGroup = map(int, itemGroup)
-					
+
 		self.send(dict(
 			groups=dict(((group.id, group.toDict()) for group in map(groups.get, itemGroup) if group)),
 			id=id,
@@ -146,7 +203,7 @@ class ReceiverProtocol(Int32StringReceiver):
 	def commands_message(self, id, item):
 		itemType = 'stats' if item.has_key('ids') else 'insert'
 		itemMessage = item['ids'] if itemType == 'stats' else None
-					
+
 		if itemType == 'insert':
 			response = (dict(
 				id=id
@@ -244,21 +301,21 @@ class ReceiverProtocol(Int32StringReceiver):
 				if (not item['message'].get('html')) and (not item['message'].get('text')):
 					raise ReceiverError('Value "message" must be contains "html" and/or "text" fields')
 
-				if (not item['message'].get('from')):
-					raise ReceiverError('Value "message" must be contains "from" field')
+				if (not item['message'].get('sender')):
+					raise ReceiverError('Value "message" must be contains "sender" field')
 
-				if not isinstance(item['message']['from'], DictType):
-					raise ReceiverError('Value "message" field "from" must be dictonary type')
+				if not isinstance(item['message']['sender'], DictType):
+					raise ReceiverError('Value "message" field "sender" must be dictonary type')
 
 				if item['message'].get('headers') and not isinstance(item['message']['headers'], DictType):
 					raise ReceiverError('Value "message" field "headers" must be dictonary type')
 
 			messageId = item['message']['id'] if 'id' in item['message'] else None
-			messageId = int(messageId) if messageId is not None else 0
+			messageId = int(messageId) if messageId is not None else None
 
 			# Create message
 			if messageId is None:
-				message = Message.fromDict(item['message'])
+				message = Message.fromDict(dict(id=messages.id, **item['message']))
 				message.params = dict((
 
 				))
@@ -302,7 +359,7 @@ class ReceiverProtocol(Int32StringReceiver):
 				# Update group
 				if group is not None:
 					group.all += response['counts']['queued']
-					group.wait += response['counts']['queued']			
+					group.wait += response['counts']['queued']
 
 			self.send(response)
 		else:
