@@ -1,4 +1,29 @@
-mail-services
+Mail-services
 =============
 
-Mail-Services is lite sending many mails
+
+Introduction
+------------
+
+Mail-Services is lite queue for sending many mails.
+
+Mail-Services is written in Python, based on http://twistedmatrix.com and required Python 2.6+.
+
+
+Licenses
+--------
+
+Copyright 2013 p0is0n (poisonoff@gmail.com).
+
+Mail-Services is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Mail-Services is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Mail-Services.  If not, see <http://www.gnu.org/licenses/>.
