@@ -292,6 +292,7 @@ class ReceiverProtocol(Int32StringReceiver):
 			if response['counts']['queued'] > 0:
 				# Update group
 				if group is not None:
+					group.all += response['counts']['queued']
 					group.wait += response['counts']['queued']			
 
 			self.send(response)

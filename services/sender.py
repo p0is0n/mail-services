@@ -56,7 +56,7 @@ from twisted.internet import reactor
 from twisted.web.http import OK, NOT_FOUND, PARTIAL_CONTENT
 from twisted.application.service import Service
 
-from core.db import messages, tos
+from core.db import messages, tos, groups
 from core.dirs import tmp
 from core.constants import DEBUG, DEBUG_SENDER, CHARSET
 from core.utils import sleep
@@ -250,11 +250,21 @@ class SenderService(Service):
 							# Sleep
 							yield sleep(self.senderIntervalEmpty)
 						else:
+							rowId = row.id
+							rowGroup = None
+
 							try:
 								# Get message
 								row.message = messages.get(row.message)
 								row.priority = 0
 								row.retries -= 1
+
+								if row.group:
+									rowGroup = groups.get(row.group)
+								
+								if rowGroup:
+									rowGroup.sending += 1
+									rowGroup.wait -= 1
 
 								# Add to queue
 								self.queuePut(row)
@@ -267,6 +277,8 @@ class SenderService(Service):
 								if row.retries > 0:
 									# Fallback
 									pass
+								elif rowGroup:
+									rowGroup.errors += 1
 
 								# Throw
 								raise e, None, traceback
@@ -335,6 +347,13 @@ class SenderService(Service):
 				'queueProcess item', item.id, 'retries', item.retries, system='-'))
 
 			try:
+				itemId = item.id
+				itemGroup = None
+
+				if item.group:
+					# Fetch group
+					itemGroup = groups.get(item.group)
+
 				# Data mail
 				id = str(uuid4())
 				current = dict()
@@ -589,15 +608,24 @@ class SenderService(Service):
 
 				result = ((yield deferred))
 
+				if itemGroup:
+					itemGroup.sending -= 1
+					itemGroup.sent += 1
+
 				# Debug
 				(msg(self.name,
 					'queueProcess item', item.id, 'sent', repr(result), system='-'))
 			except Exception, e:
 				err()
 
+				if itemGroup:
+					itemGroup.sending -= 1
+
 				if item.retries > 0:
 					# Fallback
 					pass
+				elif itemGroup:
+					itemGroup.errors += 1
 
 				# Debug
 				(msg(self.name,
