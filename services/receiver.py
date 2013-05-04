@@ -227,15 +227,18 @@ class ReceiverProtocol(Int32StringReceiver):
 			if item['message'].get('headers') and not isinstance(item['message']['headers'], DictType):
 				raise ReceiverError('Value "message" field "headers" must be dictonary type')
 
-			message = Message.fromDict(dict(id=messages.id, **item['message']))
-			message.params = dict((
+			messageParams = dict((
 
 			))
 
+			# Add params
 			if item['message'].get('headers'):
-				message.params['headers'] = item['message']['headers']
+				messageParams['headers'] = item['message']['headers']
 			else:
-				message.params['headers'] = dict()
+				messageParams['headers'] = dict()
+
+			message = Message.fromDict(dict(id=messages.id, **item['message']))
+			message.params = messageParams
 
 			response['message'] = (dict(
 				id=messages.add(message),
@@ -315,18 +318,25 @@ class ReceiverProtocol(Int32StringReceiver):
 
 			# Create message
 			if messageId is None:
-				message = Message.fromDict(dict(id=messages.id, **item['message']))
-				message.params = dict((
+				messageParams = dict((
 
 				))
 
+				# Add params
 				if item['message'].get('headers'):
-					message.params['headers'] = item['message']['headers']
+					messageParams['headers'] = item['message']['headers']
 				else:
-					message.params['headers'] = dict()
+					messageParams['headers'] = dict()
+
+				message = Message.fromDict(dict(id=messages.id, **item['message']))
+				message.params = messageParams
 
 				# Add to database
 				messageId = messages.add(message)
+			else:
+				message = messages.get(messageId)
+				if message is None:
+					raise ReceiverError('Value "message" {0} not found'.format(messageId))
 
 			if itemGroup:
 				# Check group
@@ -360,6 +370,9 @@ class ReceiverProtocol(Int32StringReceiver):
 				if group is not None:
 					group.all += response['counts']['queued']
 					group.wait += response['counts']['queued']
+
+				# Update message
+				message.tos += response['counts']['queued']
 
 			self.send(response)
 		else:

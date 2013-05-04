@@ -98,7 +98,7 @@ class BaseWithStorage(Base):
 	_cached = None
 
 	_cachedNone = object()
-	_cachedLife = 20
+	_cachedLife = 60
 	_cachedTime = None
 
 	def _cachedSet(self, name, value):
@@ -163,15 +163,18 @@ class Message(BaseWithStorage):
 
 	id = None
 	time = None
-	params = None
+	last = None
+	tos = 0
 	sender = None
 
 	available = ((
 		'id',
 		'subject',
 		'time',
+		'last',
 		'text',
 		'html',
+		'tos',
 		'sender',
 		'params',
 	))
@@ -195,9 +198,18 @@ class Message(BaseWithStorage):
 		return (dict(
 			id=self.id,
 			time=self.time,
-			params=self.params,
+			last=self.last,
+			tos=self.tos,
 			sender=self.sender
 		))
+
+	@property
+	def params(self):
+		return self.get('params')
+
+	@params.setter
+	def params(self, value):
+		return self.set('params', value)
 
 	@property
 	def subject(self):

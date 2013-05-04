@@ -65,6 +65,10 @@ from core.smtp import ESMTPSenderFactory
 from core.http import Headers, HttpAgent, BufferProtocol, FileProtocol, ContentDecoderAgent, GzipDecoder, HTTPError
 
 
+class SenderStopItem(Exception):
+	"""Stop item in process"""
+
+
 class SenderService(Service):
 
 	queueWorkers = config.getint('sender', 'workers')
@@ -258,8 +262,6 @@ class SenderService(Service):
 							rowGroup = None
 
 							try:
-								# Get message
-								row.message = messages.get(row.message)
 								row.priority = 0
 								row.retries -= 1
 
@@ -280,7 +282,11 @@ class SenderService(Service):
 
 								if row.retries > 0:
 									# Fallback
-									pass
+									tos.add(row)
+
+									if rowGroup:
+										rowGroup.sending -= 1
+										rowGroup.wait += 1
 								elif rowGroup:
 									rowGroup.errors += 1
 
@@ -315,10 +321,10 @@ class SenderService(Service):
 
 		# Try
 		try:
-			msg(self.name, 'start queueWorker #%d' % (
+			msg(self.name, 'start queueWorker #%02d' % (
 				number), system='-')
 
-			while self.isStarted:
+			while self.isStarted or self.queue.pending:
 				deferred = self.queue.get()
 				deferred.addCallback(self.queueProcess)
 
@@ -326,7 +332,7 @@ class SenderService(Service):
 				yield deferred.addErrback(err)
 				yield sleep(self.senderIntervalNext)
 
-			msg(self.name, 'stops queueWorker #%d' % (
+			msg(self.name, 'stops queueWorker #%02d' % (
 				number), system='-')
 		finally:
 			self._workers -= 1
@@ -335,7 +341,7 @@ class SenderService(Service):
 
 	@inlineCallbacks
 	def queueProcess(self, item):
-		if (not self.isStarted) or (item is self.queueStop):
+		if item is self.queueStop:
 			# Stop
 			returnValue(None)
 
@@ -346,26 +352,42 @@ class SenderService(Service):
 			charsetMessage = 'UTF-8'
 			charsetIn = 'utf8'
 
-			# Debug
-			(msg(self.name,
-				'queueProcess item', item.id, 'retries', item.retries, system='-'))
+			if DEBUG:
+				# Debug
+				(msg(self.name,
+					'queueProcess item', item.id, 'start, retries', item.retries, system='-'))
+			else:
+				(msg(self.name,
+					'queueProcess item', item.id, 'start', system='-'))
 
 			try:
 				itemId = item.id
+				itemMessage = messages.get(item.message)
 				itemGroup = None
+
+				if not itemMessage:
+					# Clean
+					item.priority = 0
+					item.retries = 0
+
+					raise RuntimeError('Message for item not found {0}'.format(item.message))
 
 				if item.group:
 					# Fetch group
 					itemGroup = groups.get(item.group)
+
+				if not self.isStarted:
+					# Stop
+					raise SenderStopItem()
 
 				# Data mail
 				id = str(uuid4())
 				current = dict()
 
 				# From email
-				if isinstance(item.message.sender, DictType):
-					current['fEmail'] = item.message.sender['email']
-					current['fNames'] = item.message.sender['name']
+				if isinstance(itemMessage.sender, DictType):
+					current['fEmail'] = itemMessage.sender['email']
+					current['fNames'] = itemMessage.sender['name']
 
 					if not isinstance(current['fNames'], UnicodeType):
 						current['fNames'] = current['fNames'].decode(charsetIn, 'replace')
@@ -387,8 +409,8 @@ class SenderService(Service):
 				current['body'] = MIMEMultipart('related')
 				current['body'].set_charset(charsetMessage)
 
-				if item.message.subject:
-					current['subject'] = item.message.subject
+				if itemMessage.subject:
+					current['subject'] = itemMessage.subject
 
 					if not isinstance(current['subject'], UnicodeType):
 						current['subject'] = text.decode('utf8', 'replace')
@@ -425,8 +447,11 @@ class SenderService(Service):
 				current['parts'] = []
 
 				# Get messages
-				current['html'] = item.message.html
-				current['text'] = item.message.text
+				current['html'] = itemMessage.html
+				current['text'] = itemMessage.text
+
+				# Update message
+				itemMessage.last = int(reactor.seconds())
 
 				if current['text']:
 					if not isinstance(current['text'], UnicodeType):
@@ -489,7 +514,7 @@ class SenderService(Service):
 							# Clean
 							del images_url
 
-							semaphoreImages = DeferredSemaphore(5)
+							semaphoreImages = DeferredSemaphore(config.getint('sender', 'attach-images-threads'))
 							deferredsImages = [semaphoreImages.run(self.downloadToTemporary, url=url) for (url, sources) in images]
 
 							for i, (status, result) in enumerate((yield DeferredList(deferredsImages, fireOnOneErrback=False, consumeErrors=True))):
@@ -558,20 +583,17 @@ class SenderService(Service):
 				contextFactory.method = SSLv3_METHOD
 
 				file = StringIO()
-				file.seek(0)
 
 				g = Generator(file, mangle_from_=True)
 				g.flatten(current['body'])
 
-				if DEBUG:
-					file.seek(0)
-					file.seek(0)
+				file.seek(0, 0)
 
+				if DEBUG:
 					(msg(self.name,
 						'queueProcess item', item.id, 'data', file.read(), current, system='-'))
 				
-				file.seek(0)
-				file.seek(0)
+					file.seek(0, 0)
 
 				if DEBUG_SENDER:
 					deferred.callback('OK')
@@ -586,7 +608,7 @@ class SenderService(Service):
 						contextFactory=False,
 						requireTransportSecurity=False,
 						requireAuthentication=bool(config.get('smtp', 'username')),
-						retries=3,
+						retries=2,
 						timeout=10,
 					))
 
@@ -616,24 +638,34 @@ class SenderService(Service):
 					itemGroup.sending -= 1
 					itemGroup.sent += 1
 
-				# Debug
-				(msg(self.name,
-					'queueProcess item', item.id, 'sent', repr(result), system='-'))
+				try:
+					# Debug
+					(msg(self.name,
+						'queueProcess item', item.id, 'sent', repr(result), system='-'))
+				except:
+					err()
 			except Exception, e:
-				err()
+				itemStopped = isinstance(e, SenderStopItem)
+
+				# Show error if not stopped
+				if not itemStopped:
+					err()
 
 				if itemGroup:
 					itemGroup.sending -= 1
 
-				if item.retries > 0:
+				if item.retries > 0 or itemStopped:
 					# Fallback
-					pass
+					tos.add(item)
+
+					if itemGroup:
+						itemGroup.wait += 1
 				elif itemGroup:
 					itemGroup.errors += 1
 
 				# Debug
 				(msg(self.name,
-					'queueProcess item', item.id, 'fallback', system='-'))
+					'queueProcess item', item.id, 'fallback', repr(e), system='-'))
 		finally:
 			self._process -= 1
 

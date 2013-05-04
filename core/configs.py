@@ -87,9 +87,15 @@ class Config(ConfigParser, Notify):
 	  'interval-empty=2.0',
 	  'interval-next=0.5',
 	  'attach-images=yes',
+	  'attach-images-threads=5',
 
 	  '[receiver]',
 	  'listen=tcp:6132',
+
+	  '[garbage]',
+	  'messages-interval=600',
+	  'old-last-messages=3600',
+	  'old-time-messages=86400',
 
 	  '[smtp]',
 	  'hostname=localhost',

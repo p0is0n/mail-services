@@ -67,6 +67,13 @@ class Base:
 	def counter(self, start):
 		return count(start, step=1)
 
+	def getData(self):
+		if self.data:
+			return self.data
+
+		# Default
+		return self.empty()
+
 	def startSync(self):
 		self.loopingSync = LoopingCall(self.sync)
 		self.loopingSync.start(60, True)
@@ -136,6 +143,24 @@ class Messages(Base):
 
 	def get(self, id):
 		return self.data.get(id)
+
+	def delete(self, id, force=True):
+		if force:
+			try:
+				del self.data[id]
+
+				# Changes
+				self.changesOne += 1
+				self.changesAll += 1
+			except KeyError:
+				# Skip
+				pass
+		else:
+			del self.data[id]
+
+			# Changes
+			self.changesOne += 1
+			self.changesAll += 1
 
 	def empty(self):
 		return dict()

@@ -102,6 +102,8 @@ class HttpClientProtocol(TimeoutMixin, HTTP11ClientProtocol):
 
 class HttpClientFactory(_HTTP11ClientFactory):
 
+	noisy = DEBUG
+
 	def buildProtocol(self, addr):
 		return HttpClientProtocol(self._quiescentCallback)
 

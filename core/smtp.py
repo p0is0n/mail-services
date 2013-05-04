@@ -20,8 +20,9 @@ import os
 
 from twisted.python.log import msg, err
 from twisted.internet import reactor
+from twisted.internet import error
 
-from twisted.mail.smtp import ESMTPSenderFactory as _ESMTPSenderFactory, ESMTPSender as _ESMTPSender
+from twisted.mail.smtp import ESMTPSenderFactory as _ESMTPSenderFactory, ESMTPSender as _ESMTPSender, SMTPConnectError
 from twisted.mail import relaymanager
 
 from core.constants import DEBUG
@@ -48,4 +49,19 @@ class ESMTPSender(_ESMTPSender):
 
 class ESMTPSenderFactory(_ESMTPSenderFactory):
 
+	noisy = DEBUG
 	protocol = ESMTPSender
+
+	def _processConnectionError(self, connector, err):
+		if self.retries < self.sendFinished <= 0:
+			# Rewind the file in case part of it was read while attempting to send the message.
+			self.file.seek(0, 0)
+
+			# Try
+			connector.connect()
+			self.retries += 1
+		elif self.sendFinished <= 0:
+			if err.check(error.ConnectionDone):
+				err.value = SMTPConnectError(-1, "Unable to connect to server.")
+
+			self.result.errback(err.value)

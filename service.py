@@ -26,6 +26,7 @@ from core.configs import config
 
 from services.sender import SenderService
 from services.receiver import ReceiverService
+from services.garbage import GarbageService
 
 
 application = Application("Mail-Services")
@@ -33,9 +34,11 @@ application = Application("Mail-Services")
 # Make services
 senderService = SenderService()
 receiverService = ReceiverService(config.get('receiver', 'listen'))
+garbageService = GarbageService()
 
 services = MultiService()
 services.setServiceParent(application)
 
 services.addService(senderService)
 services.addService(receiverService)
+services.addService(garbageService)
