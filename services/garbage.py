@@ -217,18 +217,19 @@ class GarbageService(Service):
 
 			# Clean messages
 			for id, message in messages.getData().iteritems():
-				if (message.last and (current - message.last) >= oldLast):
-					# Remove message
-					if DEBUG:
-						msg(self.name, 'process messages', 'remove, old last', id, current - message.last, system='-')
+				if message.tos <= 0:
+					if (message.last and (current - message.last) >= oldLast):
+						# Remove message
+						if DEBUG:
+							msg(self.name, 'process messages', 'remove, old last', id, current - message.last, system='-')
 
-					append(id)
-				elif (message.last is None and (current - message.time) >= oldTime):
-					# Remove message
-					if DEBUG:
-						msg(self.name, 'process messages', 'remove, old time', id, current - message.time, system='-')
+						append(id)
+					elif (message.last is None and (current - message.time) >= oldTime):
+						# Remove message
+						if DEBUG:
+							msg(self.name, 'process messages', 'remove, old time', id, current - message.time, system='-')
 
-					append(id)
+						append(id)
 
 			# Sleep
 			(yield sleep(1))

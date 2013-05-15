@@ -28,7 +28,7 @@ from twisted.python.log import msg, err
 from twisted.internet.reactor import callLater
 from twisted.internet import reactor
 
-from core.constants import DEBUG
+from core.constants import DEBUG, GROUP_STATUS_ACTIVE
 from core.dirs import tmp, dbs
 
 
@@ -40,6 +40,9 @@ class Base(object):
 
 	def toDict(self):
 		raise NotImplementedError
+
+	def delete(self):
+		"""Delete object"""
 
 
 class BaseWithStorage(Base):
@@ -95,6 +98,19 @@ class BaseWithStorage(Base):
 				# Return to user, not from cache
 				return result
 
+	def deleteFiles(self, *files):
+		for name in files:
+			path, file = self.path(name)
+
+			if os.path.exists(file):
+				try:
+					os.unlink(file)
+				except:
+					err()
+
+			# Clean cache
+			self._cachedDelete(name)
+
 	_cached = None
 
 	_cachedNone = object()
@@ -147,14 +163,15 @@ class BaseWithStorage(Base):
 			if not self._cached:
 				self._cached = None
 
-		if (name in self._cachedTime and self._cachedTime[name] is not None):
-			if self._cachedTime[name].active():
-				self._cachedTime[name].cancel()
-			
-			# Clean
-			self._cachedTime[name] = None
-			if not self._cachedTime:
-				self._cachedTime = None
+		if self._cachedTime is not None:
+			if (name in self._cachedTime and self._cachedTime[name] is not None):
+				if self._cachedTime[name].active():
+					self._cachedTime[name].cancel()
+				
+				# Clean
+				self._cachedTime[name] = None
+				if not self._cachedTime:
+					self._cachedTime = None
 
 
 class Message(BaseWithStorage):
@@ -235,6 +252,9 @@ class Message(BaseWithStorage):
 	def text(self, value):
 		return self.set('text', value)
 
+	def delete(self):
+		self.deleteFiles('params', 'subject', 'html', 'text')
+
 
 class To(Base):
 
@@ -301,6 +321,7 @@ class Group(Base):
 	sent = 0
 	errors = 0
 	time = None
+	status = GROUP_STATUS_ACTIVE
 
 	available = ((
 		'id',
@@ -310,6 +331,7 @@ class Group(Base):
 		'sent',
 		'errors',
 		'time',
+		'status',
 	))
 
 	def __init__(self, **params):
@@ -333,4 +355,5 @@ class Group(Base):
 			sent=self.sent,
 			errors=self.errors,
 			time=self.time,
+			status=self.status
 		))

@@ -22,7 +22,7 @@ import os
 from marshal import dump as mdump, load as mload
 from itertools import count
 from heapq import heappush, heappop, heapify
-from collections import deque
+from collections import deque, defaultdict
 from time import time
 
 from twisted.python import log
@@ -31,7 +31,8 @@ from twisted.internet.defer import inlineCallbacks, returnValue
 from twisted.internet.address import IPv4Address, UNIXAddress
 from twisted.internet.task import LoopingCall
 
-from core.constants import DEBUG
+from core.constants import DEBUG, QUEUE_PAUSE_PRIORITY, QUEUE_UNPAUSE_PRIORITY, QUEUE_MAX_PRIORITY
+from core.constants import GROUP_STATUS_ACTIVE, GROUP_STATUS_PAUSED, GROUP_STATUS_INACTIVE
 from core.configs import config
 from core.dirs import dbs, tmp
 from core.mappers import Message, To, Group
@@ -145,6 +146,9 @@ class Messages(Base):
 		return self.data.get(id)
 
 	def delete(self, id, force=True):
+		message = self.data.get(id)
+
+		# Delete from seld
 		if force:
 			try:
 				del self.data[id]
@@ -161,6 +165,10 @@ class Messages(Base):
 			# Changes
 			self.changesOne += 1
 			self.changesAll += 1
+
+		# Clean object
+		if message is not None:
+			message.delete()
 
 	def empty(self):
 		return dict()
@@ -209,6 +217,19 @@ class Tos(Base):
 			if id > self.id:
 				self.next = self.counter(id)
 
+		if to.group:
+			group = groups.get(to.group)
+
+			if group:
+				# Check group status
+				assert group.status != GROUP_STATUS_INACTIVE
+				
+				if group.status == GROUP_STATUS_PAUSED:
+					to.priority = QUEUE_PAUSE_PRIORITY + to.priority
+
+			# Clean
+			del group
+
 		# Insert
 		if to.after is not None:
 			(heappush(
@@ -234,19 +255,25 @@ class Tos(Base):
 		return id
 
 	def pop(self):
-		if self.data[1]:
-			# Changes
-			self.changesOne += 1
-			self.changesAll += 1
+		to = None
+		ps = None
 
-			return heappop(self.data[1])[1]
+		if self.data[1]:
+			# Check statuses
+			if self.data[1][0][0] <= QUEUE_MAX_PRIORITY:
+				to = heappop(self.data[1])[1]
 
 		if self.data[0]:
+			to = self.data[0].popleft()
+
+		# Found
+		if to is not None:
 			# Changes
 			self.changesOne += 1
 			self.changesAll += 1
 
-			return self.data[0].pop()
+			# Success
+			return to
 
 	def checkAfter(self):
 		if self.data[2]:
@@ -262,7 +289,7 @@ class Tos(Base):
 				# if DEBUG:
 				# 	log.msg(self, 'checkAfter', len(data), 'wait', current)
 
-				startup, to1 =data[0]
+				startup, to1 = data[0]
 				if startup <= current:
 					# if DEBUG:
 					# 	log.msg(self, 'checkAfter', 'startup', to1, 'got', startup, current)
@@ -273,6 +300,17 @@ class Tos(Base):
 					# 	log.msg(self, 'checkAfter', 'startup', to1, to2, 'rotate')
 
 					if to1 is to2:
+						if to2.group:
+							group = groups.get(to2.group)
+
+							if group:
+								# Check group status
+								if group.status == GROUP_STATUS_PAUSED:
+									to2.priority = QUEUE_PAUSE_PRIORITY + to2.priority
+
+							# Clean
+							del group
+
 						# Ok, rotate
 						if to2.priority > 0:
 							(heappush(
@@ -299,6 +337,180 @@ class Tos(Base):
 			if DEBUG:
 				log.msg(self, 'checkAfter', len(data), 'wait', current, 'rotated', rotated)
 
+	def statusForGroup(self, group, status):
+		if status == GROUP_STATUS_ACTIVE:
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'active')
+
+			# A queue
+			aq = self.data[1][:]
+			aa = None
+
+			# B queue
+			bq = self.data[0]
+			ba = bq.append
+
+			if aq:
+				# Update
+				self.data[1][:] = []
+
+				# C queue
+				cq = self.data[1]
+				ca = cq.append
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', len(aq))
+
+				for (a, b) in aq:
+					if a >= QUEUE_PAUSE_PRIORITY and b.group == group:
+						# Paused
+						b.priority = b.priority - QUEUE_PAUSE_PRIORITY
+
+						# If priority
+						if b.priority > 0:
+							# Update
+							ca((b.priority, b))
+						else:
+							ba(b)
+					else:
+						ca((a, b))
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', 'ok')
+
+				# Transform list into a heap
+				heapify(cq)
+
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'active', 'ok')
+		elif status == GROUP_STATUS_PAUSED:
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'paused')
+
+			# A queue
+			aq = self.data[1]
+			aa = aq.append
+
+			# B queue
+			bq = list(self.data[0])
+			ba = bq.append
+
+			if aq:
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', len(aq))
+
+				for i, (a, b) in enumerate(aq):
+					if a <= QUEUE_MAX_PRIORITY and b.group == group:
+						# Paused
+						b.priority = b.priority + QUEUE_PAUSE_PRIORITY
+
+						# Update
+						aq[i] = (b.priority, b)
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', 'ok')
+
+			if bq:
+				# Update
+				self.data[0].clear()
+
+				# C queue
+				cq = self.data[0]
+				ca = cq.append
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'bq', len(bq))
+
+				for (b) in bq:
+					if b.group == group:
+						# Paused
+						b.priority = QUEUE_PAUSE_PRIORITY
+
+						# Update
+						aa((b.priority, b))
+					else:
+						ca(b)
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'bq', 'ok')
+
+			# Transform list into a heap
+			heapify(aq)
+
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'paused', 'ok')
+		elif status == GROUP_STATUS_INACTIVE:
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'inactive')
+
+			# A queue
+			aq = self.data[1][:]
+			aa = None
+
+			# B queue
+			bq = list(self.data[0])
+			ba = bq.append
+
+			if aq:
+				# Update
+				self.data[1][:] = []
+
+				# C queue
+				cq = self.data[1]
+				ca = cq.append
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', len(aq))
+
+				for (a, b) in aq:
+					if b.group == group:
+						# Update
+						if b.message:
+							message = messages.get(b.message)
+
+							if message is not None:
+								# Update tos count
+								message.tos -= 1
+					else:
+						ca((a, b))
+
+				# Transform list into a heap
+				heapify(cq)
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'aq', 'ok')
+
+			if bq:
+				# Update
+				self.data[0].clear()
+
+				# C queue
+				cq = self.data[0]
+				ca = cq.append
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'bq', len(bq))
+
+				for (b) in bq:
+					if b.group == group:
+						# Update
+						if b.message:
+							message = messages.get(b.message)
+
+							if message is not None:
+								# Update tos count
+								message.tos -= 1
+					else:
+						ca(b)
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'bq', 'ok')
+
+			if DEBUG:
+				log.msg(self, 'statusForGroup', group, 'inactive', 'ok')
+		else:
+			raise RuntimeError('Unknown status {0}'.format(status))
+		
 	def empty(self):
 		return (deque(), [], [])
 
@@ -373,6 +585,22 @@ class Groups(Base):
 
 	def get(self, id):
 		return self.data.get(id)
+
+	def status(self, group, status):
+		group = self.data[group]
+
+		if status == GROUP_STATUS_ACTIVE or status == GROUP_STATUS_PAUSED or status == GROUP_STATUS_INACTIVE:
+			if group.status != status:
+				# Changed
+				tos.statusForGroup(group.id, status)
+
+			# Update
+			group.status = status
+		else:
+			raise RuntimeError('Unknown status {0}'.format(status))
+
+		# Success
+		return group.status
 
 	def empty(self):
 		return dict()

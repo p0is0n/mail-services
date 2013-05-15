@@ -84,7 +84,7 @@ class Config(ConfigParser, Notify):
 
 	  '[sender]',
 	  'workers=1',
-	  'interval-empty=2.0',
+	  'interval-empty=5.0',
 	  'interval-next=0.5',
 	  'attach-images=yes',
 	  'attach-images-threads=5',
@@ -94,7 +94,7 @@ class Config(ConfigParser, Notify):
 
 	  '[garbage]',
 	  'messages-interval=600',
-	  'old-last-messages=3600',
+	  'old-last-messages=1800',
 	  'old-time-messages=86400',
 
 	  '[smtp]',

@@ -255,6 +255,9 @@ class SenderService(Service):
 						row = row if row else None
 
 						if not row:	
+							if DEBUG:
+								msg(self.name, 'empty queue, wait', self.senderIntervalEmpty, 'seconds', system='-')
+
 							# Sleep
 							yield sleep(self.senderIntervalEmpty)
 						else:
@@ -589,11 +592,11 @@ class SenderService(Service):
 
 				file.seek(0, 0)
 
-				if DEBUG:
-					(msg(self.name,
-						'queueProcess item', item.id, 'data', file.read(), current, system='-'))
-				
-					file.seek(0, 0)
+				# if DEBUG:
+				# 	(msg(self.name,
+				# 		'queueProcess item', item.id, 'data', file.read(), current, system='-'))
+				# 
+				# 	file.seek(0, 0)
 
 				if DEBUG_SENDER:
 					deferred.callback('OK')
@@ -638,6 +641,8 @@ class SenderService(Service):
 					itemGroup.sending -= 1
 					itemGroup.sent += 1
 
+				itemMessage.tos -= 1
+
 				try:
 					# Debug
 					(msg(self.name,
@@ -651,17 +656,20 @@ class SenderService(Service):
 				if not itemStopped:
 					err()
 
-				if itemGroup:
-					itemGroup.sending -= 1
-
 				if item.retries > 0 or itemStopped:
 					# Fallback
 					tos.add(item)
 
 					if itemGroup:
+						itemGroup.sending -= 1
 						itemGroup.wait += 1
-				elif itemGroup:
-					itemGroup.errors += 1
+				else:
+					if itemMessage:
+						itemMessage.tos -= 1
+
+					if itemGroup:
+						itemGroup.sending -= 1
+						itemGroup.errors += 1
 
 				# Debug
 				(msg(self.name,

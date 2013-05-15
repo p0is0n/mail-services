@@ -40,7 +40,8 @@ from twisted.protocols.basic import Int32StringReceiver
 
 from core.db import messages, tos, groups
 from core.dirs import tmp
-from core.constants import DEBUG, DEBUG_DUMPS, CHARSET
+from core.constants import DEBUG, DEBUG_DUMPS, CHARSET, QUEUE_MAX_PRIORITY
+from core.constants import GROUP_STATUS_ACTIVE, GROUP_STATUS_INACTIVE, GROUP_STATUSES, GROUP_STATUSES_NAMES
 from core.mappers import Message, To, Group
 
 
@@ -191,14 +192,58 @@ class ReceiverProtocol(Int32StringReceiver):
 		))
 
 	def commands_group(self, id, item):
-		itemGroup = item['group'] if item.has_key('group') else item['groups']
-		itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
-		itemGroup = map(int, itemGroup)
+		itemType = 'stats' if item.has_key('ids') else 'insert'
+		itemGroup = item['ids'] if itemType == 'stats' else None
 
-		self.send(dict(
-			groups=dict(((group.id, group.toDict()) for group in map(groups.get, itemGroup) if group)),
-			id=id,
-		))
+		if itemType == 'insert':
+			response = (dict(
+				id=id
+			))
+
+			if not isinstance(item['group'], DictType):
+				raise ReceiverError('Value "group" must be dictonary type')
+
+			if (not item['group'].get('id')):
+				raise ReceiverError('Value "group" must be contains "id" field')
+
+			if 'status' in item['group'] and not item['group']['status'] in GROUP_STATUSES_NAMES:
+				raise ReceiverError('Value "group" must be contains valid "status" field, values {0}'.format(GROUP_STATUSES.values()))
+
+			# Check group
+			group = groups.get(item['group']['id'])
+
+			# Insert 
+			if not group:
+				group = Group.fromDict(dict(id=item['group'].pop('id'), **item['group']))
+			else:
+				if 'status' in item['group']:
+					# Update status
+					groups.status(group.id, item['group']['status'])
+				else:
+					self.send(dict(
+						error='Group already "{0}" exists'.format(group.id),
+						id=itemId,
+					))
+
+			response['group'] = (dict(
+				id=groups.add(group),
+				status=group.status,
+			))
+
+			self.send(response)
+		elif itemType == 'stats':
+			itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
+			itemGroup = map(int, itemGroup)
+
+			self.send(dict(
+				groups=dict(((group.id, group.toDict()) for group in map(groups.get, itemGroup) if group)),
+				id=id,
+			))
+		else:
+			self.send(dict(
+				error='Unknown type "{0}"'.format(itemType),
+				id=itemId,
+			))
 
 	def commands_message(self, id, item):
 		itemType = 'stats' if item.has_key('ids') else 'insert'
@@ -278,8 +323,8 @@ class ReceiverProtocol(Int32StringReceiver):
 				if (not to['email']) or (not to['name']) or (int(to.get('priority', 0)) < 0):
 					raise ReceiverError('Value "to" must have "email" and "name" fields')
 
-				to['priority'] = min(10, int(to.get('priority', 0)))
-				to['priority'] = (-(to['priority'] - 10) + 1) if to['priority'] > 0 else 0
+				to['priority'] = min(QUEUE_MAX_PRIORITY, int(to.get('priority', 0)))
+				to['priority'] = (-(to['priority'] - QUEUE_MAX_PRIORITY) + 1) if to['priority'] > 0 else 0
 
 				# Create parts
 				if not 'parts' in to:
@@ -341,13 +386,8 @@ class ReceiverProtocol(Int32StringReceiver):
 			if itemGroup:
 				# Check group
 				group = groups.get(itemGroup)
-				if not group:
-					group = Group.fromDict(dict(
-						id=itemGroup,
-					))
-
-					# Add new
-					groups.add(group)
+				if group is None or group.status == GROUP_STATUS_INACTIVE:
+					raise ReceiverError('Value "group" {0} not found or inactive'.format(itemGroup))
 			else:
 				group = None
 
