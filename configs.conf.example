@@ -1,0 +1,19 @@
+[common]
+debug=no
+
+[db]
+sync=3600 0, 120 100
+
+[smtp]
+hostname=127.0.0.1
+portname=25
+username=
+password=
+ssl=no
+
+[sender]
+workers=1
+interval-empty=5.0
+interval-next=0.5
+attach-images=yes
+attach-images-threads=5
