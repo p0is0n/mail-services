@@ -36,7 +36,7 @@ class MailServices {
 		$timeout = $this -> defaults['timeout'];
 		$success = null;
 
-		if (! ($this -> connection = stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, $timeout, STREAM_CLIENT_PERSISTENT | STREAM_CLIENT_CONNECT))) {
+		if (! ($this -> connection = stream_socket_client('tcp://' . $host . ':' . $port . '/', $errno, $errstr, $timeout, STREAM_CLIENT_PERSISTENT | STREAM_CLIENT_CONNECT))) {
 			throw new Exception('Cannot connect to "' . $host . ':' . $port . '", reason ' . $errstr);
 		}
 	}
