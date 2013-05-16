@@ -14,6 +14,10 @@ class MailServices {
 
 	protected $bufferTo = false;
 
+	const GROUP_STATUS_ACTIVE = 1;
+	const GROUP_STATUS_PAUSED = 2;
+	const GROUP_STATUS_INACTIVE = 3;
+
 	public function __construct(Array $params = array()) {
 		if (isset($params['host'])) {
 			$host = $params['host'];
@@ -32,8 +36,8 @@ class MailServices {
 		$timeout = $this -> defaults['timeout'];
 		$success = null;
 
-		if (! ($this -> connection = @ fsockopen($host, $port, &$errno, &$errstr, $timeout))) {
-			throw new Exception('Cannot connect to "' . $host . ':' . $port . '"');
+		if (! ($this -> connection = stream_socket_client('tcp://' . $host . ':' . $port, $errno, $errstr, $timeout, STREAM_CLIENT_PERSISTENT | STREAM_CLIENT_CONNECT))) {
+			throw new Exception('Cannot connect to "' . $host . ':' . $port . '", reason ' . $errstr);
 		}
 	}
 
