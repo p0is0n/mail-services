@@ -217,18 +217,19 @@ class Tos(Base):
 			if id > self.id:
 				self.next = self.counter(id)
 
-		if to.group:
-			group = groups.get(to.group)
+		if to.after is None:
+			if to.group:
+				group = groups.get(to.group)
 
-			if group:
-				# Check group status
-				assert group.status != GROUP_STATUS_INACTIVE
-				
-				if group.status == GROUP_STATUS_PAUSED:
-					to.priority = QUEUE_PAUSE_PRIORITY + to.priority
+				if group:
+					# Check group status
+					assert group.status != GROUP_STATUS_INACTIVE
+					
+					if group.status == GROUP_STATUS_PAUSED:
+						to.priority = QUEUE_PAUSE_PRIORITY + to.priority
 
-			# Clean
-			del group
+				# Clean
+				del group
 
 		# Insert
 		if to.after is not None:
