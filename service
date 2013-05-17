@@ -83,7 +83,7 @@ start_service() {
 
 stop_service() {
   echo -n " $PURPLE*$NO_COLOUR Stopping $LIGHT_GRAY$PROJECT$NO_COLOUR $SERVICE_NAME... "
-  start-stop-daemon -Kq -R 10 -p $PIDFILE
+  start-stop-daemon -Kq -R "TERM/60/KILL/5" -p $PIDFILE
   e=$?
   if [ $e -eq 1 ]; then
     echo "${RED}not running$NO_COLOUR"

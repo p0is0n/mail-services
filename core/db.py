@@ -298,10 +298,11 @@ class Tos(Base):
 				log.msg(self, 'checkAfter', len(data), 'wait', current)
 
 			while data and rotated < 10000:
-				# if DEBUG:
-				# 	log.msg(self, 'checkAfter', len(data), 'wait', current)
-
 				startup, to1 = data[0]
+
+				if DEBUG:
+					log.msg(self, 'checkAfter', 'wait first', startup - current, 'seconds')
+
 				if startup <= current:
 					# if DEBUG:
 					# 	log.msg(self, 'checkAfter', 'startup', to1, 'got', startup, current)
@@ -465,6 +466,10 @@ class Tos(Base):
 			bq = list(self.data[0])
 			ba = bq.append
 
+			# D queue
+			dq = self.data[2][:]
+			da = None
+
 			if aq:
 				# Update
 				self.data[1][:] = []
@@ -519,6 +524,35 @@ class Tos(Base):
 
 				if DEBUG:
 					log.msg(self, 'statusForGroup', group, 'bq', 'ok')
+
+			if dq:
+				# Update
+				self.data[2][:] = []
+
+				# E queue
+				eq = self.data[2]
+				ea = eq.append
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'dq', len(dq))
+
+				for (a, b) in dq:
+					if b.group == group:
+						# Update
+						if b.message:
+							message = messages.get(b.message)
+
+							if message is not None:
+								# Update tos count
+								message.tos -= 1
+					else:
+						ea((a, b))
+
+				# Transform list into a heap
+				heapify(eq)
+
+				if DEBUG:
+					log.msg(self, 'statusForGroup', group, 'eq', 'ok')
 
 			if DEBUG:
 				log.msg(self, 'statusForGroup', group, 'inactive', 'ok')
