@@ -319,17 +319,19 @@ class Tos(Base):
 								if group.status == GROUP_STATUS_PAUSED:
 									to2.priority = QUEUE_PAUSE_PRIORITY + to2.priority
 
+						if not to2.group or group.status != GROUP_STATUS_INACTIVE:
+							# Ok, rotate
+							if to2.priority > 0:
+								(heappush(
+									self.data[1], 
+									(to2.priority, to2)
+								))
+							else:
+								self.data[0].append(to2)
+
+						if to2.group:
 							# Clean
 							del group
-
-						# Ok, rotate
-						if to2.priority > 0:
-							(heappush(
-								self.data[1], 
-								(to2.priority, to2)
-							))
-						else:
-							self.data[0].append(to2)
 
 						# Changes
 						self.changesOne += 1
