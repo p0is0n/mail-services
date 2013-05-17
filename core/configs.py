@@ -83,6 +83,7 @@ class Config(ConfigParser, Notify):
 	  'sync=3600 0, 120 100',
 
 	  '[sender]',
+	  'debug=no',
 	  'workers=1',
 	  'interval-empty=5.0',
 	  'interval-next=0.5',

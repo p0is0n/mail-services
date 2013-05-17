@@ -599,7 +599,7 @@ class SenderService(Service):
 				# 	file.seek(0, 0)
 
 				if DEBUG_SENDER:
-					deferred.callback('OK')
+					deferred.callback(('DEBUG OK', current['tEmail']))
 				else:
 					factory = (ESMTPSenderFactory(
 						username=config.get('smtp', 'username'),

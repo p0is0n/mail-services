@@ -205,6 +205,8 @@ class ReceiverProtocol(Int32StringReceiver):
 
 			if (not item['group'].get('id')):
 				raise ReceiverError('Value "group" must be contains "id" field')
+			else:
+				item['group']['id'] = int(item['group']['id'])
 
 			if 'status' in item['group'] and not item['group']['status'] in GROUP_STATUSES_NAMES:
 				raise ReceiverError('Value "group" must be contains valid "status" field, values {0}'.format(GROUP_STATUSES.values()))
@@ -234,7 +236,7 @@ class ReceiverProtocol(Int32StringReceiver):
 		elif itemType == 'stats':
 			itemGroup = (itemGroup,) if not isinstance(itemGroup, (TupleType, ListType)) else itemGroup
 			itemGroup = map(int, itemGroup)
-
+			
 			self.send(dict(
 				groups=dict(((group.id, group.toDict()) for group in map(groups.get, itemGroup) if group)),
 				id=id,
@@ -327,14 +329,15 @@ class ReceiverProtocol(Int32StringReceiver):
 				to['priority'] = (-(to['priority'] - QUEUE_MAX_PRIORITY) + 1) if to['priority'] > 0 else 0
 
 				# Create parts
-				if not 'parts' in to:
+				if not 'parts' in to or not to['parts']:
 					to['parts'] = dict()
 
 				if not isinstance(to['parts'], DictType):
 					raise ReceiverError('Value "parts" in "to" must be dictonary type')
 
 				if 'delay' in to:
-					to['after'] = int(reactor.seconds() + to['delay'])
+					if to['delay']:
+						to['after'] = int(reactor.seconds() + to['delay'])
 
 					# Clean
 					del to['delay']
