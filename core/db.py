@@ -261,19 +261,21 @@ class Tos(Base):
 		if DEBUG:
 			log.msg(self, 'pop', len(self.data[0]), len(self.data[1]))
 
-		if self.data[1]:
-			# Check statuses
-			if self.data[1][0][0] <= QUEUE_MAX_PRIORITY:
+		if to is None:
+			if self.data[1]:
+				# Check statuses
+				if self.data[1][0][0] <= QUEUE_MAX_PRIORITY:
+					if DEBUG:
+						log.msg(self, 'pop', '1')
+
+					to = heappop(self.data[1])[1]
+
+		if to is None:
+			if self.data[0]:
 				if DEBUG:
-					log.msg(self, 'pop', '1')
+					log.msg(self, 'pop', '0')
 
-				to = heappop(self.data[1])[1]
-
-		if self.data[0]:
-			if DEBUG:
-				log.msg(self, 'pop', '0')
-
-			to = self.data[0].popleft()
+				to = self.data[0].popleft()
 
 		# Found
 		if to is not None:
