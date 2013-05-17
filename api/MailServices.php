@@ -63,8 +63,20 @@ class MailServices {
 			$length = fread($this -> connection, 4);
 			$length = array_pop(unpack('N', $length));
 
-			if (false !== ($result = fread($this -> connection, $length))) {
-				$data = json_decode($result, true);
+			$buffer = '';
+
+			while ($length > strlen($buffer)) {
+				if (false !== ($data = fread($this -> connection, $length))) {
+					$buffer .= $data;
+				}
+				else {
+					// Fail
+					return false;
+				}
+			}
+
+			if (! empty($buffer)) {
+				$data = json_decode($buffer, true);
 
 				if (!! ($data)) {
 					return $data;
