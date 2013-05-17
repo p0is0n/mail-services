@@ -112,6 +112,24 @@ class MailServices {
 		$this -> bufferTo = false;
 	}
 
+	public function getGroups(Array $groups) {
+		$result = $this -> sendAndRead(array(
+			'command' => 'group',
+			'ids' => $groups,
+		));
+
+		if (! empty($result)) {
+			if (isset($result['groups'])) {
+				return $result['groups'];
+			}
+			else {
+				return null;
+			}
+		}
+
+		throw new Exception('Mail-Services unknown error');
+	}
+
 	public function getGroup($group) {
 		$result = $this -> sendAndRead(array(
 			'command' => 'group',
