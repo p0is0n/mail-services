@@ -284,6 +284,10 @@ class ReceiverProtocol(Int32StringReceiver):
 			else:
 				messageParams['headers'] = dict()
 
+			# Clean
+			if 'headers' in item['message']:
+				del item['message']['headers']
+
 			message = Message.fromDict(dict(id=messages.id, **item['message']))
 			message.params = messageParams
 
@@ -376,6 +380,10 @@ class ReceiverProtocol(Int32StringReceiver):
 				else:
 					messageParams['headers'] = dict()
 
+				# Clean
+				if 'headers' in item['message']:
+					del item['message']['headers']
+
 				message = Message.fromDict(dict(id=messages.id, **item['message']))
 				message.params = messageParams
 
@@ -395,7 +403,7 @@ class ReceiverProtocol(Int32StringReceiver):
 				group = None
 
 			for to in item['to']:
-				to = To.fromDict(to)
+				to = To.fromDict(dict(id=tos.id, **to))
 				to.message = messageId
 
 				if group is not None:

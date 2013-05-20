@@ -28,6 +28,9 @@ from core.configs import config
 from core.dirs import root
 
 
+VERSION_NAME = 'Mail-Services'
+VERSION = '0.2b'
+
 DEBUG = config.debugMode()
 DEBUG_SENDER = config.getboolean('sender', 'debug')
 DEBUG_DUMPS = False

@@ -12,6 +12,7 @@ password=
 ssl=no
 
 [sender]
+debug=no
 workers=1
 interval-empty=5.0
 interval-next=0.5

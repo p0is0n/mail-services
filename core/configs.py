@@ -77,6 +77,7 @@ class Config(ConfigParser, Notify):
 	defaultConfig = '\n'.join((
 	  '[common]',
 	  'debug=no',
+	  'organization=""',
 	  'bindAddresses=""',
 
 	  '[db]',

@@ -41,6 +41,10 @@ from email.header import Header
 from email.message import Message
 from email.generator import Generator
 from email.utils import make_msgid
+from email.utils import formataddr
+from email.utils import formatdate
+from email.utils import COMMASPACE
+from email.encoders import encode_quopri, encode_base64
 from smtplib import SMTP_PORT, SMTP_SSL_PORT
 
 from twisted.mail import relaymanager
@@ -58,7 +62,7 @@ from twisted.application.service import Service
 
 from core.db import messages, tos, groups
 from core.dirs import tmp
-from core.constants import DEBUG, DEBUG_SENDER, CHARSET
+from core.constants import DEBUG, DEBUG_SENDER, CHARSET, VERSION_NAME, VERSION
 from core.utils import sleep
 from core.configs import config
 from core.smtp import ESMTPSenderFactory
@@ -385,6 +389,8 @@ class SenderService(Service):
 
 				# Data mail
 				id = str(uuid4())
+				idRelated = str(uuid4())
+
 				current = dict()
 
 				# From email
@@ -409,8 +415,12 @@ class SenderService(Service):
 					current['tEmail'] = item.email
 					current['tNames'] = None
 
-				current['body'] = MIMEMultipart('related')
+				current['root'] = MIMEMultipart('mixed')
+
+				current['body'] = MIMEMultipart('related', start='<{0}>'.format(idRelated))
 				current['body'].set_charset(charsetMessage)
+
+				current['root'].attach(current['body'])
 
 				if itemMessage.subject:
 					current['subject'] = itemMessage.subject
@@ -418,34 +428,38 @@ class SenderService(Service):
 					if not isinstance(current['subject'], UnicodeType):
 						current['subject'] = text.decode('utf8', 'replace')
 
-					current['body']['Subject'] = Header(current['subject'], charsetMessage)
+					current['root']['Subject'] = Header(current['subject'], charsetMessage)
 
-				current['body']['From'] = ('%s <%s>' % (
+				current['root']['From'] = ('%s <%s>' % (
 					Header(current['fNames'], charsetMessage),
 					current['fEmail']
 				))
 
 				# To
 				if current['tNames']:
-					current['body']['To'] = ('%s <%s>' % (
+					current['root']['To'] = ('%s <%s>' % (
 						Header(current['tNames'], charsetMessage),
 						current['tEmail']
 					))
 				else:
-					current['body']['To'] = current['tEmail']
+					current['root']['To'] = current['tEmail']
+
+				current['root']['Date'] = formatdate(localtime=1)
 
 				# if current['rEmail']:
 				# 	if current['rNames']:
-				# 		current['body']['Reply-To'] = ('%s <%s>' % (
+				# 		current['root']['Reply-To'] = ('%s <%s>' % (
 				# 			Header(current['rNames'], charsetMessage),
 				# 			current['rEmail']
 				# 		))
 				# 	else:
-				# 		current['body']['Reply-To'] = current['rEmail']
+				# 		current['root']['Reply-To'] = current['rEmail']
 
-				current['body'].add_header('Message-ID', '%s' % (
-					make_msgid('{0}-{1}'.format(id, item.id))
-				))
+				current['root'].add_header('Message-ID', '%s' % (make_msgid('{0}-{1}'.format(id, item.id))))
+				current['root'].add_header('X-Mailer', '%s %s' % (VERSION_NAME, VERSION))
+
+				if config.get('common', 'organization'):
+					current['root'].add_header('Organization', config.get('common', 'organization'))
 
 				current['parts'] = []
 
@@ -455,6 +469,14 @@ class SenderService(Service):
 
 				# Update message
 				itemMessage.last = int(reactor.seconds())
+				itemMessageParams = itemMessage.params
+
+				if itemMessageParams['headers']:
+					for key, value in itemMessageParams['headers'].iteritems():
+						current['root'].add_header(key, value)
+
+				# Clean
+				del itemMessageParams
 
 				if current['text']:
 					if not isinstance(current['text'], UnicodeType):
@@ -532,7 +554,7 @@ class SenderService(Service):
 								if result:
 									with open(result['file'], 'rb') as fp:
 										image = MIMEImage(fp.read(), result['info']['type'][1])
-										image.add_header('Content-ID', '<{0}>'.format(result['info']['hash']))
+										image.add_header('Content-ID', '<i_{0}>'.format(result['info']['hash']))
 
 										if result['info']['extension'] is not None:
 											image.add_header('Content-Disposition', 'inline', filename='{0}{1}'.format(
@@ -546,7 +568,7 @@ class SenderService(Service):
 
 									# Replace in content
 									for source in images[i][1]:
-										current['html'] = current['html'].replace(source['source'], '{type}={separator}cid:{info[hash]}{separator}'.format(
+										current['html'] = current['html'].replace(source['source'], '{type}={separator}cid:i_{info[hash]}{separator}'.format(
 											type=source['type'], 
 											separator=source['separator'],
 											**result
@@ -558,6 +580,7 @@ class SenderService(Service):
 
 				if current['text'] and current['html']:
 					message = MIMEMultipart('alternative')
+					message.add_header('Content-ID', '<{0}>'.format(idRelated))
 
 					message.attach(MIMEText(current['text'], 'plain', _charset=charsetMessage))
 					message.attach(MIMEText(current['html'], 'html', _charset=charsetMessage))
@@ -565,9 +588,11 @@ class SenderService(Service):
 				elif current['text'] or current['html']:
 					if current['text']:
 						message = MIMEText(current['text'], 'plain', _charset=charsetMessage)
+						message.add_header('Content-ID', '<{0}>'.format(idRelated))
 
 					if current['html']:
 						message = MIMEText(current['html'], 'html', _charset=charsetMessage)
+						message.add_header('Content-ID', '<{0}>'.format(idRelated))
 				else:
 					# Fail
 					raise RuntimeError('Wow! Wrong message {0}'.format(repr(item)))
@@ -588,15 +613,15 @@ class SenderService(Service):
 				file = StringIO()
 
 				g = Generator(file, mangle_from_=True)
-				g.flatten(current['body'])
+				g.flatten(current['root'])
 
 				file.seek(0, 0)
 
-				# if DEBUG:
-				# 	(msg(self.name,
-				# 		'queueProcess item', item.id, 'data', file.read(), current, system='-'))
-				# 
-				# 	file.seek(0, 0)
+				if DEBUG:
+					(msg(self.name,
+						'queueProcess item', item.id, 'data', file.read(), current, system='-'))
+				
+					file.seek(0, 0)
 
 				if DEBUG_SENDER:
 					deferred.callback(('DEBUG OK', current['tEmail']))
@@ -644,6 +669,9 @@ class SenderService(Service):
 				itemMessage.tos -= 1
 
 				try:
+					# Clean
+					item.delete()
+
 					# Debug
 					(msg(self.name,
 						'queueProcess item', item.id, 'sent', repr(result), system='-'))
@@ -664,6 +692,9 @@ class SenderService(Service):
 						itemGroup.sending -= 1
 						itemGroup.wait += 1
 				else:
+					# Clean
+					item.delete()
+
 					if itemMessage:
 						itemMessage.tos -= 1
 

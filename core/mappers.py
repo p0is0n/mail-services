@@ -196,6 +196,9 @@ class Message(BaseWithStorage):
 		'params',
 	))
 
+	def __del__(self):
+		self.delete()
+
 	def __init__(self, **params):
 		if len(params):
 			if 'id' in params:
@@ -256,7 +259,9 @@ class Message(BaseWithStorage):
 		self.deleteFiles('params', 'subject', 'html', 'text')
 
 
-class To(Base):
+class To(BaseWithStorage):
+
+	prefix = 't'
 
 	id = None
 	message = None
@@ -264,7 +269,6 @@ class To(Base):
 	email = None
 	name = None
 	time = None
-	parts = None
 	after = None
 	priority = 0
 	retries = None
@@ -282,8 +286,14 @@ class To(Base):
 		'retries',
 	))
 
+	def __del__(self):
+		self.delete()
+
 	def __init__(self, **params):
 		if len(params):
+			if 'id' in params:
+				self.id = params.pop('id')
+
 			for key, value in params.iteritems():
 				if not key in self.available:
 					raise RuntimeError('Unknown key for To {0}'.format(key))
@@ -305,11 +315,21 @@ class To(Base):
 			email=self.email,
 			name=self.name,
 			time=self.time,
-			parts=self.parts,
 			after=self.after,
 			priority=self.priority,
 			retries=self.retries,
 		))
+
+	@property
+	def parts(self):
+		return self.get('parts')
+
+	@parts.setter
+	def parts(self, value):
+		return self.set('parts', value)
+
+	def delete(self):
+		self.deleteFiles('parts')
 
 
 class Group(Base):
