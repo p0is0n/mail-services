@@ -29,15 +29,16 @@ DATA = ((
 	( (dict(
 		command='mail',
 		message=dict(
-			html='html',
-			subject='subj',
+			html='html {:part1:} <img src="http://www.flip.kz/img/logo.png"/> <br/> <img src="http://s.picsfab.com/static/contents/images/d/0/9/67f6aec4630ffadb28ee8c053dd46.jpg"/>',
+			text='text {:part2:} ',
+			subject='subj  {:part1:}  {:part3:} ',
 			sender=dict(
 				name='name',
-				email='test@email.com'
+				email='robot@fokus-pokus.me'
 			),
 		),
-		to=dict(name='name1', email='email1@email.com')
-	)), ) * 200000
+		to=dict(name='name1', email='poisonoff@yandex.ru', parts=dict(part1=u'part-ок1', part2=u'part-ок2', part3=u'part-ок3'))
+	)), ) * 1
 ))
 
 s = (socket.socket(

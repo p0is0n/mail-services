@@ -119,7 +119,7 @@ class HttpAgent(Agent):
 
 	def __init__(self, reactor, connectTimeout=None, bindAddress=None):
 		pool = HttpConnectionPool(reactor, True)
-		pool.maxPersistentPerHost = 10
+		pool.maxPersistentPerHost = 5
 		pool.cachedConnectionTimeout = 3600
 		pool.retryAutomatically = True
 
@@ -208,6 +208,7 @@ class FileProtocol(TimeoutMixin, Protocol):
 	def __init__(self, deferred, file):
 		self._deferred = deferred
 		self._file = file
+		self._length = 0
 
 	def __del__(self):
 		self._deferred = None
@@ -221,6 +222,7 @@ class FileProtocol(TimeoutMixin, Protocol):
 		if self.timeout:
 			self.setTimeout(self.timeout)
 
+		self._length += len(data)
 		self._file.write(data)
 
 	def connectionMade(self):
@@ -258,6 +260,9 @@ class FileProtocol(TimeoutMixin, Protocol):
 
 		self.setTimeout(None)
 		self.transport.stopProducing()
+
+	def length(self):
+		return self._length
 
 	def __repr__(self):
 		return '<FileProtocol 0x{0:X}>'.format(id(self))

@@ -129,7 +129,7 @@ class BaseWithStorage(Base):
 		if (name in self._cachedTime and self._cachedTime[name] is not None):
 			if self._cachedTime[name].active():
 				self._cachedTime[name].cancel()
-			
+
 			# Clean
 			self._cachedTime[name] = None
 
@@ -167,7 +167,7 @@ class BaseWithStorage(Base):
 			if (name in self._cachedTime and self._cachedTime[name] is not None):
 				if self._cachedTime[name].active():
 					self._cachedTime[name].cancel()
-				
+
 				# Clean
 				self._cachedTime[name] = None
 				if not self._cachedTime:
@@ -195,9 +195,6 @@ class Message(BaseWithStorage):
 		'sender',
 		'params',
 	))
-
-	def __del__(self):
-		self.delete()
 
 	def __init__(self, **params):
 		if len(params):
@@ -285,9 +282,6 @@ class To(BaseWithStorage):
 		'priority',
 		'retries',
 	))
-
-	def __del__(self):
-		self.delete()
 
 	def __init__(self, **params):
 		if len(params):

@@ -30,6 +30,7 @@ from uuid import uuid4
 from types import ListType, TupleType, UnicodeType, DictType, StringTypes
 from json import loads, dumps
 from collections import defaultdict
+from urlparse import urlparse, urlunparse
 
 from OpenSSL.SSL import SSLv3_METHOD
 
@@ -44,10 +45,12 @@ from email.utils import make_msgid
 from email.utils import formataddr
 from email.utils import formatdate
 from email.utils import COMMASPACE
+from email.charset import Charset, add_charset, SHORTEST, BASE64, QP
 from email.encoders import encode_quopri, encode_base64
 from smtplib import SMTP_PORT, SMTP_SSL_PORT
 
 from twisted.mail import relaymanager
+from twisted.mail.smtp import messageid
 from twisted.internet.ssl import ClientContextFactory
 
 from twisted.python.log import msg, err
@@ -58,11 +61,12 @@ from twisted.internet.task import cooperate
 from twisted.internet.reactor import callLater
 from twisted.internet import reactor
 from twisted.web.http import OK, NOT_FOUND, PARTIAL_CONTENT
+from twisted.web.iweb import UNKNOWN_LENGTH, IResponse
 from twisted.application.service import Service
 
 from core.db import messages, tos, groups
 from core.dirs import tmp
-from core.constants import DEBUG, DEBUG_SENDER, CHARSET, VERSION_NAME, VERSION
+from core.constants import DEBUG, DEBUG_SENDER, CHARSET, VERSION_NAME, VERSION, USERAGENT
 from core.utils import sleep
 from core.configs import config
 from core.smtp import ESMTPSenderFactory
@@ -258,7 +262,7 @@ class SenderService(Service):
 						row = tos.pop()
 						row = row if row else None
 
-						if not row:	
+						if not row:
 							if DEBUG:
 								msg(self.name, 'empty queue, wait', self.senderIntervalEmpty, 'seconds', system='-')
 
@@ -274,7 +278,7 @@ class SenderService(Service):
 
 								if row.group:
 									rowGroup = groups.get(row.group)
-								
+
 								if rowGroup:
 									rowGroup.sending += 1
 									rowGroup.wait -= 1
@@ -296,6 +300,9 @@ class SenderService(Service):
 										rowGroup.wait += 1
 								elif rowGroup:
 									rowGroup.errors += 1
+
+									# Clean
+									item.delete()
 
 								# Throw
 								raise e, None, traceback
@@ -344,7 +351,14 @@ class SenderService(Service):
 		finally:
 			self._workers -= 1
 
-	_re_attach_images_html = re.compile(u'<(?:img)[^>]+((src)\s*=\s*([\'\"]?)((?:https?:\/\/)[^>\'\"]+)[\'\"]?)', re.I | re.S).findall
+	charsetMessage = 'UTF-8'
+	charsetIn = 'utf8'
+
+	messageTypes = ('text', 'html')
+	partTypes = ('text', 'html', 'subject')
+
+	prefixImagesId = 'image_{0}'.format
+	prefixFilesId = 'file_{0}'.format
 
 	@inlineCallbacks
 	def queueProcess(self, item):
@@ -356,9 +370,6 @@ class SenderService(Service):
 
 		# Try
 		try:
-			charsetMessage = 'UTF-8'
-			charsetIn = 'utf8'
-
 			if DEBUG:
 				# Debug
 				(msg(self.name,
@@ -389,17 +400,12 @@ class SenderService(Service):
 
 				# Data mail
 				id = str(uuid4())
-				idRelated = str(uuid4())
-
 				current = dict()
 
 				# From email
 				if isinstance(itemMessage.sender, DictType):
 					current['fEmail'] = itemMessage.sender['email']
-					current['fNames'] = itemMessage.sender['name']
-
-					if not isinstance(current['fNames'], UnicodeType):
-						current['fNames'] = current['fNames'].decode(charsetIn, 'replace')
+					current['fNames'] = self.encodeToString(itemMessage.sender['name'])
 				else:
 					# Fail
 					raise RuntimeError('Wow! Wrong from {0}'.format(repr(item)))
@@ -407,69 +413,81 @@ class SenderService(Service):
 				# To email
 				if item.name:
 					current['tEmail'] = item.email
-					current['tNames'] = item.name
-
-					if not isinstance(current['tNames'], UnicodeType):
-						current['tNames'] = current['tNames'].decode(charsetIn, 'replace')
+					current['tNames'] = self.encodeToString(item.name)
 				else:
 					current['tEmail'] = item.email
 					current['tNames'] = None
 
-				current['root'] = MIMEMultipart('mixed')
-
-				current['body'] = MIMEMultipart('related', start='<{0}>'.format(idRelated))
-				current['body'].set_charset(charsetMessage)
-
-				current['root'].attach(current['body'])
-
 				if itemMessage.subject:
-					current['subject'] = itemMessage.subject
+					current['subject'] = self.encodeToString(itemMessage.subject)
+				else:
+					current['subject'] = None
 
-					if not isinstance(current['subject'], UnicodeType):
-						current['subject'] = text.decode('utf8', 'replace')
+				# Update message
+				itemMessage.last = int(reactor.seconds())
+				itemMessageParams = itemMessage.params
 
-					current['root']['Subject'] = Header(current['subject'], charsetMessage)
+				# Get messages
+				current['html'] = itemMessage.html
+				current['text'] = itemMessage.text
+
+				for messageType in self.messageTypes:
+					if current[messageType]:
+						current[messageType] = self.encodeToString(current[messageType])
+
+				# Replace parts
+				for part in (('name', 'tNames'), ('email', 'tEmail')):
+					key = '{{:{0}:}}'.format(part[0])
+					value = current[part[1]]
+
+					for partType in self.partTypes:
+						if current[partType]:
+							current[partType] = current[partType].replace(key, value)
+
+				if item.parts:
+					for part, value in item.parts.iteritems():
+						key = '{{:{0}:}}'.format(part)
+
+						for partType in self.partTypes:
+							if current[partType]:
+								current[partType] = current[partType].replace(key, self.encodeToString(value))
+
+				if not current['text'] and not current['html']:
+					# Fail
+					raise RuntimeError('Wow! Wrong messages, empty {0}'.format(repr(item)))
+
+				current['root'] = (yield self.multipartRoot(
+					item.id,
+					current['text'],
+					current['html']
+				))
+
+				# Clean
+				del current['text'], current['html']
+
+				if current['subject']:
+					current['root']['Subject'] = Header(current['subject'], self.charsetMessage)
 
 				current['root']['From'] = ('%s <%s>' % (
-					Header(current['fNames'], charsetMessage),
+					Header(current['fNames'], self.charsetMessage),
 					current['fEmail']
 				))
 
 				# To
 				if current['tNames']:
 					current['root']['To'] = ('%s <%s>' % (
-						Header(current['tNames'], charsetMessage),
+						Header(current['tNames'], self.charsetMessage),
 						current['tEmail']
 					))
 				else:
 					current['root']['To'] = current['tEmail']
 
 				current['root']['Date'] = formatdate(localtime=1)
-
-				# if current['rEmail']:
-				# 	if current['rNames']:
-				# 		current['root']['Reply-To'] = ('%s <%s>' % (
-				# 			Header(current['rNames'], charsetMessage),
-				# 			current['rEmail']
-				# 		))
-				# 	else:
-				# 		current['root']['Reply-To'] = current['rEmail']
-
-				current['root'].add_header('Message-ID', '%s' % (make_msgid('{0}-{1}'.format(id, item.id))))
+				current['root'].add_header('Message-ID', '%s' % (messageid('{0}'.format(item.id))))
 				current['root'].add_header('X-Mailer', '%s %s' % (VERSION_NAME, VERSION))
 
 				if config.get('common', 'organization'):
-					current['root'].add_header('Organization', config.get('common', 'organization'))
-
-				current['parts'] = []
-
-				# Get messages
-				current['html'] = itemMessage.html
-				current['text'] = itemMessage.text
-
-				# Update message
-				itemMessage.last = int(reactor.seconds())
-				itemMessageParams = itemMessage.params
+					current['root'].add_header('Organization', self.encodeToString(config.get('common', 'organization')))
 
 				if itemMessageParams['headers']:
 					for key, value in itemMessageParams['headers'].iteritems():
@@ -477,131 +495,6 @@ class SenderService(Service):
 
 				# Clean
 				del itemMessageParams
-
-				if current['text']:
-					if not isinstance(current['text'], UnicodeType):
-						current['text'] = current['text'].decode(charsetIn, 'replace')
-
-				if current['html']:
-					if not isinstance(current['html'], UnicodeType):
-						current['html'] = current['html'].decode(charsetIn, 'replace')
-
-				# Replace parts
-				for part in (('name', 'tNames'), ('email', 'tEmail')):
-					key = '{{:{0}:}}'.format(part[0])
-					value = current[part[1]]
-
-					if current['text']:
-						current['text'] = current['text'].replace(key, value)
-
-					if current['html']:
-						current['html'] = current['html'].replace(key, value)
-
-				if item.parts:
-					for part, value in item.parts.iteritems():
-						key = '{{:{0}:}}'.format(part)
-						
-						if not isinstance(value, StringTypes):
-							value = str(value)
-						elif not isinstance(value, UnicodeType):
-							value = value.decode(charsetIn, 'replace')
-
-						if current['text']:
-							current['text'] = current['text'].replace(key, value)
-
-						if current['html']:
-							current['html'] = current['html'].replace(key, value)
-
-				# Attach images
-				if config.getboolean('sender', 'attach-images'):
-					if current['html']:
-						images_url = self._re_attach_images_html(current['html'])
-						images_url = map(lambda row: dict(source=row[0], type=row[1], separator=row[2], url=row[3].encode(CHARSET)), images_url)
-
-						if images_url:
-							images = defaultdict(list)
-
-							# Group images
-							for image_url in images_url:
-								images[image_url['url']].append(dict(
-									source=image_url['source'],
-									type=image_url['type'],
-									separator=image_url['separator'],
-								))
-
-							# Transfort images to list, with access by index
-							images = list(images.items())
-
-							if DEBUG:
-								(msg(self.name,
-									'queueProcess item', item.id, 'download images', len(images), 'sources', len(images_url), system='-'))
-
-							# Clean
-							del images_url
-
-							semaphoreImages = DeferredSemaphore(config.getint('sender', 'attach-images-threads'))
-							deferredsImages = [semaphoreImages.run(self.downloadToTemporary, url=url) for (url, sources) in images]
-
-							for i, (status, result) in enumerate((yield DeferredList(deferredsImages, fireOnOneErrback=False, consumeErrors=True))):
-								if not status:
-									# Skip errors
-									continue
-
-								if DEBUG:
-									(msg(self.name,
-										'queueProcess item', item.id, 'download images', 'image', i, result, system='-'))
-
-								if result:
-									with open(result['file'], 'rb') as fp:
-										image = MIMEImage(fp.read(), result['info']['type'][1])
-										image.add_header('Content-ID', '<i_{0}>'.format(result['info']['hash']))
-
-										if result['info']['extension'] is not None:
-											image.add_header('Content-Disposition', 'inline', filename='{0}{1}'.format(
-												result['info']['hash'], 
-												result['info']['extension']
-											))
-										else:
-											image.add_header('Content-Disposition', 'inline')
-
-									current['parts'].append(image)
-
-									# Replace in content
-									for source in images[i][1]:
-										current['html'] = current['html'].replace(source['source'], '{type}={separator}cid:i_{info[hash]}{separator}'.format(
-											type=source['type'], 
-											separator=source['separator'],
-											**result
-										))
-
-							if DEBUG:
-								(msg(self.name,
-									'queueProcess item', item.id, 'download images', 'ok', system='-'))
-
-				if current['text'] and current['html']:
-					message = MIMEMultipart('alternative')
-					message.add_header('Content-ID', '<{0}>'.format(idRelated))
-
-					message.attach(MIMEText(current['text'], 'plain', _charset=charsetMessage))
-					message.attach(MIMEText(current['html'], 'html', _charset=charsetMessage))
-
-				elif current['text'] or current['html']:
-					if current['text']:
-						message = MIMEText(current['text'], 'plain', _charset=charsetMessage)
-						message.add_header('Content-ID', '<{0}>'.format(idRelated))
-
-					if current['html']:
-						message = MIMEText(current['html'], 'html', _charset=charsetMessage)
-						message.add_header('Content-ID', '<{0}>'.format(idRelated))
-				else:
-					# Fail
-					raise RuntimeError('Wow! Wrong message {0}'.format(repr(item)))
-
-				# Add message
-				current['parts'].insert(0, message)
-
-				for part in current['parts']:
-					current['body'].attach(part)
 
 				deferred = Deferred()
 				resolver = Deferred()
@@ -617,11 +510,11 @@ class SenderService(Service):
 
 				file.seek(0, 0)
 
-				if DEBUG:
-					(msg(self.name,
-						'queueProcess item', item.id, 'data', file.read(), current, system='-'))
-				
-					file.seek(0, 0)
+				# if DEBUG:
+				# 	(msg(self.name,
+				# 		'queueProcess item', item.id, 'data', file.read(), current, system='-'))
+				#
+				# 	file.seek(0, 0)
 
 				if DEBUG_SENDER:
 					deferred.callback(('DEBUG OK', current['tEmail']))
@@ -708,6 +601,164 @@ class SenderService(Service):
 		finally:
 			self._process -= 1
 
+	@inlineCallbacks
+	def multipartRoot(self, id, text, html):
+		if DEBUG:
+			(msg(self.name,
+				'multipartRoot', id, system='-'))
+
+		if text and html:
+			multipart = MIMEMultipart('mixed')
+
+			partAlternative = MIMEMultipart('alternative')
+
+			partMessageText = MIMEText(text, 'plain', _charset=self.charsetMessage)
+			partMessageHtml = None
+
+			# Attach images
+			if config.getboolean('sender', 'attach-images'):
+				attachImages = (yield self.attachImagesFromHtml(
+					id,
+					html
+				))
+
+				if attachImages:
+					if attachImages['html'] and attachImages['parts']:
+						# Ok
+						partMessageHtml = MIMEMultipart('related')
+						partMessageHtml.attach(MIMEText(attachImages['html'], 'html', _charset=self.charsetMessage))
+
+						for part in attachImages['parts']:
+							partMessageHtml.attach(part)
+
+				# Clean
+				del attachImages
+
+			if partMessageHtml is None:
+				partMessageHtml = MIMEText(html, 'html', _charset=self.charsetMessage)
+
+			partAlternative.attach(partMessageText)
+			partAlternative.attach(partMessageHtml)
+
+			# Add part
+			multipart.attach(partAlternative)
+		elif text:
+			multipart = MIMEText(text, 'plain', _charset=self.charsetMessage)
+		elif html:
+			# Attach images
+			if config.getboolean('sender', 'attach-images'):
+				attachImages = (yield self.attachImagesFromHtml(
+					id,
+					html
+				))
+
+				if attachImages:
+					if attachImages['html'] and attachImages['parts']:
+						# Ok
+						partMessageHtml = MIMEMultipart('related')
+						partMessageHtml.attach(MIMEText(attachImages['html'], 'html', _charset=self.charsetMessage))
+
+						for part in attachImages['parts']:
+							partMessageHtml.attach(part)
+
+				# Clean
+				del attachImages
+
+			if partMessageHtml is None:
+				partMessageHtml = MIMEText(html, 'html', _charset=self.charsetMessage)
+
+			# Add part
+			multipart = partMessageHtml
+
+		if DEBUG:
+			(msg(self.name,
+				'multipartRoot', id, 'ok', system='-'))
+
+		# Success
+		returnValue(multipart)
+
+	_re_attach_images_html = re.compile(u'<(?:img|td|div|table)[^>]+((src)\s*=\s*([\'\"]?)((?:https?:\/\/)[^>\'\"]+)[\'\"]?)', re.I | re.S).findall
+
+	@inlineCallbacks
+	def attachImagesFromHtml(self, id, html):
+		attach = (dict(
+			html=None,
+			parts=[],
+		))
+
+		if DEBUG:
+			(msg(self.name,
+				'attachImagesFromHtml', id, system='-'))
+
+		images_url = self._re_attach_images_html(html)
+		images_url = map(lambda row: dict(source=row[0], type=row[1], separator=row[2], url=urlparse(row[3].encode(CHARSET))), images_url)
+
+		if images_url:
+			images = defaultdict(list)
+
+			# Group images
+			for image_url in images_url:
+				images[image_url['url']].append(dict(
+					source=image_url['source'],
+					type=image_url['type'],
+					separator=image_url['separator'],
+				))
+
+			# Transfort images to list, with access by index
+			images = list(images.items())
+
+			if DEBUG:
+				(msg(self.name,
+					'attachImagesFromHtml', id, 'download images', len(images), 'sources', len(images_url), system='-'))
+
+			# Clean
+			del images_url
+
+			semaphoreImages = DeferredSemaphore(config.getint('sender', 'attach-images-threads'))
+			deferredsImages = [semaphoreImages.run(self.downloadToTemporary, url=urlunparse(url)) for (url, sources) in images]
+
+			for i, (status, result) in enumerate((yield DeferredList(deferredsImages, fireOnOneErrback=False, consumeErrors=True))):
+				if DEBUG:
+					(msg(self.name,
+						'attachImagesFromHtml', id, 'download images', 'image', i, result, system='-'))
+
+				if not status:
+					# Skip errors
+					continue
+
+				if result:
+					with open(result['file'], 'rb') as fp:
+						image = MIMEImage(fp.read(), result['info']['type'][1])
+						image.add_header('Content-ID', '<{0}>'.format(self.prefixImagesId(result['info']['hash'])))
+
+						if result['info']['extension'] is not None:
+							image.add_header('Content-Disposition', 'inline', filename='{0}{1}'.format(
+								result['info']['hash'],
+								result['info']['extension']
+							))
+						else:
+							image.add_header('Content-Disposition', 'inline')
+
+					attach['parts'].append(image)
+
+					# Replace in content
+					for source in images[i][1]:
+						html = html.replace(source['source'], '{type}={separator}cid:{id}{separator}'.format(
+							id=self.prefixImagesId(result['info']['hash']),
+							type=source['type'],
+							separator=source['separator'],
+							**result
+						))
+
+					attach['html'] = html
+
+		if DEBUG:
+			(msg(self.name,
+				'attachImagesFromHtml', id, 'ok', system='-'))
+
+		# Success
+		returnValue(attach)
+
 	_current_download = dict()
 	_current_download_urls = set()
 
@@ -739,6 +790,9 @@ class SenderService(Service):
 		fileTmp = '{0}.tmp'.format(file)
 		fileInf = '{0}.inf'.format(file)
 
+		minSize = config.getint('sender', 'attach-images-min-size')
+		maxSize = config.getint('sender', 'attach-images-max-size')
+
 		if hash in self._current_download:
 			if self._current_download[hash] is None:
 				self._current_download[hash] = Deferred()
@@ -755,11 +809,17 @@ class SenderService(Service):
 						**loads(fp.read())
 					))
 
-				# Success
-				success = (dict(
-					file=file,
-					info=info,
-				))
+				if not ((minSize > 0 and minSize > info['size'])
+						or (maxSize > 0 and maxSize < info['size'])):
+					# Success
+					success = (dict(
+						file=file,
+						info=info,
+					))
+				else:
+					if DEBUG:
+						(msg(self.name,
+							'downloadToTemporary url', repr(url), 'hash', repr(hash), 'skip size', system='-'))
 			else:
 				if DEBUG:
 					(msg(self.name,
@@ -770,6 +830,7 @@ class SenderService(Service):
 					self._current_download_urls.add(url)
 
 					headers = Headers()
+					headers.setRawHeaders('User-Agent', [USERAGENT])
 					headers.setRawHeaders('X-Sender', ['{0}'.format(hash)])
 
 					# Download file to self tmp
@@ -824,6 +885,7 @@ class SenderService(Service):
 							url=url,
 							type=contentType,
 							hash=hash,
+							size=protocol.length(),
 							extension=self._allow_content_types_to_extension.get(
 								self._allow_content_types.index(contentType)),
 						))
@@ -832,21 +894,27 @@ class SenderService(Service):
 						with open(fileInf, 'wb') as fp:
 							fp.write(dumps(info))
 
-						# Success
-						success = (dict(
-							file=file,
-							info=info,
-						))
+						if not ((minSize > 0 and minSize > info['size'])
+								or (maxSize > 0 and maxSize < info['size'])):
+							# Success
+							success = (dict(
+								file=file,
+								info=info,
+							))
+						else:
+							if DEBUG:
+								(msg(self.name,
+									'downloadToTemporary url', repr(url), 'hash', repr(hash), 'skip size', system='-'))
 					else:
 						if DEBUG:
 							(msg(self.name,
 								'downloadToTemporary',
-								'url', 
-								repr(url), 
-								'hash', 
-								repr(hash), 
-								'unknown content type', 
-								contentType, 
+								'url',
+								repr(url),
+								'hash',
+								repr(hash),
+								'unknown content type',
+								contentType,
 								system='-'
 							))
 
@@ -886,3 +954,12 @@ class SenderService(Service):
 			if success is not None:
 				returnValue(success)
 
+	def encodeToString(self, value):
+		if not isinstance(value, StringTypes):
+			return str(value)
+
+		if not isinstance(value, UnicodeType):
+			return value.decode(self.charsetIn, 'replace')
+
+		# Default
+		return value

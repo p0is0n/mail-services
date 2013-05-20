@@ -89,6 +89,9 @@ class Config(ConfigParser, Notify):
 	  'interval-empty=5.0',
 	  'interval-next=0.5',
 	  'attach-images=yes',
+	  'attach-images-min-size=0',
+	  'attach-images-max-size=2097152',
+	  'attach-images-from=src',
 	  'attach-images-threads=5',
 
 	  '[receiver]',
