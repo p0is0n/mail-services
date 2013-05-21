@@ -3,9 +3,13 @@
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 DIR=$(cd $(dirname $0); pwd -P)
 
-echo "Clean dbs $DIR"
-find "$DIR/dbs/" -mindepth 1 -type d -print0 | xargs --null rm -fr
+echo "Clean dbs"
+find "$DIR/dbs/" -mindepth 1 -type d \( ! -iname ".*" \) -print0 | xargs --null rm -fr
 rm -f "$DIR/dbs/groups.db"
 rm -f "$DIR/dbs/tos.db"
 rm -f "$DIR/dbs/messages.db"
+echo "ok"
+
+echo "Clean tmp"
+find "$DIR/tmp/" -mindepth 1 -type f \( ! -iname ".*" \) -print0 | xargs --null rm -f
 echo "ok"
