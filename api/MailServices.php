@@ -160,6 +160,22 @@ class MailServices {
 		throw new Exception('Mail-Services unknown error');
 	}
 
+	public function setGroupStatus($id, $status) {
+		$result = $this -> sendAndRead(array(
+			'command' => 'group',
+			'group' => array('id' => $id, 'status' => $status),
+		));
+
+		if (! empty($result)) {
+			if (! empty($result['group']['id'])) {
+				// Success
+				return $result['group']['id'];
+			}
+		}
+
+		throw new Exception('Mail-Services unknown error');
+	}
+
 	public function addGroup(Array $data) {
 		$result = $this -> sendAndRead(array(
 			'command' => 'group',
