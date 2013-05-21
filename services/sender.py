@@ -607,6 +607,10 @@ class SenderService(Service):
 			(msg(self.name,
 				'multipartRoot', id, system='-'))
 
+		# Empty
+		multipart = None
+		multipartState = 0
+
 		if text and html:
 			multipart = MIMEMultipart('mixed')
 
@@ -655,20 +659,17 @@ class SenderService(Service):
 				if attachImages:
 					if attachImages['html'] and attachImages['parts']:
 						# Ok
-						partMessageHtml = MIMEMultipart('related')
-						partMessageHtml.attach(MIMEText(attachImages['html'], 'html', _charset=self.charsetMessage))
+						multipart = MIMEMultipart('related')
+						multipart.attach(MIMEText(attachImages['html'], 'html', _charset=self.charsetMessage))
 
 						for part in attachImages['parts']:
-							partMessageHtml.attach(part)
+							multipart.attach(part)
 
 				# Clean
 				del attachImages
 
-			if partMessageHtml is None:
-				partMessageHtml = MIMEText(html, 'html', _charset=self.charsetMessage)
-
-			# Add part
-			multipart = partMessageHtml
+			if multipart is None:
+				multipart = MIMEText(html, 'html', _charset=self.charsetMessage)
 
 		if DEBUG:
 			(msg(self.name,
