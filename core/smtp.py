@@ -65,3 +65,8 @@ class ESMTPSenderFactory(_ESMTPSenderFactory):
 				err.value = SMTPConnectError(-1, "Unable to connect to server.")
 
 			self.result.errback(err.value)
+
+
+class ESMTPSenderPool(object):
+	"""Pool of smtp connections"""
+
