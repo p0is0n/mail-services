@@ -16,7 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Mail-Services.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
 import os
 
 from marshal import dump as mdump, load as mload
@@ -148,7 +147,7 @@ class Messages(Base):
 	def delete(self, id, force=True):
 		message = self.data.get(id)
 
-		# Delete from seld
+		# Delete from self
 		if force:
 			try:
 				del self.data[id]
@@ -633,6 +632,35 @@ class Groups(Base):
 
 	def get(self, id):
 		return self.data.get(id)
+
+	def delete(self, id, force=True):
+		group = self.data.get(id)
+
+		# Check status
+		assert (group is None 
+			or group.status == GROUP_STATUS_INACTIVE)
+
+		# Delete from self
+		if force:
+			try:
+				del self.data[id]
+
+				# Changes
+				self.changesOne += 1
+				self.changesAll += 1
+			except KeyError:
+				# Skip
+				pass
+		else:
+			del self.data[id]
+
+			# Changes
+			self.changesOne += 1
+			self.changesAll += 1
+
+		# Clean object
+		if group is not None:
+			group.delete()
 
 	def status(self, group, status):
 		group = self.data[group]

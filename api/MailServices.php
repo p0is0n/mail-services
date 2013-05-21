@@ -233,6 +233,31 @@ class MailServices {
 		throw new Exception('Mail-Services unknown error');
 	}
 
+	public function delete($type, $id, $force = false) {
+		$result = $this -> sendAndRead(array(
+			'command' => 'delete',
+			'force' => $force,
+			$type => $id,
+		));
+
+		if (! empty($result)) {
+			if (! empty($result[$type])) {
+				// Success
+				return $result[$type];
+			}
+		}
+
+		throw new Exception('Mail-Services unknown error');
+	}
+
+	public function deleteGroup($id, $force = false) {
+		return $this -> delete('group', $id, $force);
+	}
+
+	public function deleteMessage($id, $force = false) {
+		return $this -> delete('message', $id, $force);
+	}
+
 	public function bufferTo($value) {
 		$this -> bufferTo = !! $value;
 	}

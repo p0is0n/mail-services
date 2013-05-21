@@ -191,6 +191,67 @@ class ReceiverProtocol(Int32StringReceiver):
 			id=id,
 		))
 
+	def commands_delete(self, id, item):
+		itemType = None
+		itemId = None
+		itemForce = 'force' in item and item['force']
+
+		# Get type
+		if 'group' in item:
+			itemType = 'group'
+			itemId = item['group']
+		elif 'message' in item:
+			itemType = 'message'
+			itemId = item['message']
+		else:
+			raise ReceiverError('Unknown delete type, use "group, message"')
+
+		response = (dict(
+			id=id
+		))
+
+		response[itemType] = itemId
+
+		if itemType == 'group':
+			# Check group
+			group = groups.get(itemId)
+
+			try:
+				if group is None:
+					# Group not found
+					raise ReceiverError('Group "{0}" not found'.format(itemId))
+
+				if group.status != GROUP_STATUS_INACTIVE:
+					# Group invalid status
+					raise ReceiverError('Group "{0}" status must be "{1}"'.format(itemId, GROUP_STATUSES_NAMES[GROUP_STATUS_INACTIVE]))
+
+				groups.delete(group.id)
+			except ReceiverError, e:
+				if not itemForce:
+					# No skip
+					raise e
+		elif itemType == 'message':
+			# Check message
+			message = messages.get(itemId)
+
+			try:
+				if message is None:
+					# Group not found
+					raise ReceiverError('Message "{0}" not found'.format(itemId))
+
+				if message.tos > 0:
+					# Message has tos
+					raise ReceiverError('Message "{0}" has tos'.format(itemId))
+
+				messages.delete(message.id)
+			except ReceiverError, e:
+				if not itemForce:
+					# No skip
+					raise e
+
+		# Success
+		self.send(response)
+
 	def commands_group(self, id, item):
 		itemType = 'stats' if item.has_key('ids') else 'insert'
 		itemGroup = item['ids'] if itemType == 'stats' else None
@@ -213,9 +274,8 @@ class ReceiverProtocol(Int32StringReceiver):
 
 			# Check group
 			group = groups.get(item['group']['id'])
-
-			# Insert 
-			if not group:
+			if group is None:
+				# Insert 
 				group = Group.fromDict(dict(id=item['group'].pop('id'), **item['group']))
 			else:
 				if 'status' in item['group']:
@@ -483,15 +543,13 @@ class ReceiverService(Service):
 		Service.startService(self)
 
 	def stopService(self):
+		deferred = Deferred()
+
 		if (not self.running) or self.loop == -1:
 			# Already stopped
 			return
 
 		msg(self.name, 'stops')
-
-		# Success deferred
-		deferred = Deferred()
-		callback = Deferred()
 
 		def s1(result, self=self):
 			if self._stopDeferred is None:

@@ -195,7 +195,7 @@ class SenderService(Service):
 
 			# Try stop workers
 			if self._workers > 0:
-				for worker in xrange(1, self._workers + 1):
+				for _ in xrange(1, self._workers + 1):
 					self.queue.put(self.queueStop)
 
 			if (self._process + self._workers + self._fetcher) > 0:
@@ -269,7 +269,7 @@ class SenderService(Service):
 							# Sleep
 							yield sleep(self.senderIntervalEmpty)
 						else:
-							rowId = row.id
+							# rowId = row.id
 							rowGroup = None
 
 							try:
@@ -302,7 +302,7 @@ class SenderService(Service):
 									rowGroup.errors += 1
 
 									# Clean
-									item.delete()
+									row.delete()
 
 								# Throw
 								raise e, None, traceback

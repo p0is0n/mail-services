@@ -16,8 +16,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Mail-Services.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-
 from twisted.application.service import Application, MultiService
 from twisted.application.internet import TimerService, TCPServer
 
