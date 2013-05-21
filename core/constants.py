@@ -28,7 +28,7 @@ from core.configs import config
 from core.dirs import root
 
 
-VERSION_NAME = 'Mail-Services'
+VERSION_NAME = 'Mail-Services (https://github.com/p0is0n/mail-services)'
 VERSION = '0.2b'
 
 DEBUG = config.debugMode()
