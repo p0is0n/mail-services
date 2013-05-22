@@ -69,7 +69,7 @@ from core.dirs import tmp
 from core.constants import DEBUG, DEBUG_SENDER, CHARSET, VERSION_NAME, VERSION, USERAGENT
 from core.utils import sleep
 from core.configs import config
-from core.smtp import ESMTPSenderFactory
+from core.smtp import ESMTPSenderPool, SMTPClientError
 from core.http import Headers, HttpAgent, BufferProtocol, FileProtocol, ContentDecoderAgent, GzipDecoder, HTTPError
 
 
@@ -106,9 +106,21 @@ class SenderService(Service):
 
 		self._state = 'stopped'
 
-		# Http agent
+		# Http pool
 		self._pool = HttpAgent(reactor)
-		self._agent = ContentDecoderAgent(self._pool, (('gzip', GzipDecoder), ))
+		self._httpPool = ContentDecoderAgent(self._pool, (('gzip', GzipDecoder), ))
+
+		# Smtp pool
+		self._smtpPool = (ESMTPSenderPool(
+			poolsize=config.getint('smpt', 'poolsize'),
+			username=config.get('smtp', 'username'),
+			password=config.get('smtp', 'password'),
+			hostname=config.get('smtp', 'hostname'),
+			portname=config.getint('smtp', 'portname'),
+			requireTransportSecurity=False,
+			requireAuthentication=bool(config.get('smtp', 'username')),
+			ssl=config.getboolean('smtp', 'ssl'),
+		))
 
 	@property
 	def isStarted(self):
@@ -496,13 +508,6 @@ class SenderService(Service):
 				# Clean
 				del itemMessageParams
 
-				deferred = Deferred()
-				resolver = Deferred()
-
-				# Try send
-				contextFactory = ClientContextFactory()
-				contextFactory.method = SSLv3_METHOD
-
 				file = StringIO()
 
 				g = Generator(file, mangle_from_=True)
@@ -517,37 +522,13 @@ class SenderService(Service):
 				# 	file.seek(0, 0)
 
 				if DEBUG_SENDER:
-					deferred.callback(('DEBUG OK', current['tEmail']))
+					deferred = succeed(('DEBUG OK', (current['tEmail'], )))
 				else:
-					factory = (ESMTPSenderFactory(
-						username=config.get('smtp', 'username'),
-						password=config.get('smtp', 'password'),
-						fromEmail=current['fEmail'],
-						toEmail=(current['tEmail'], ),
-						deferred=deferred,
-						file=file,
-						contextFactory=False,
-						requireTransportSecurity=False,
-						requireAuthentication=bool(config.get('smtp', 'username')),
-						retries=2,
-						timeout=10,
+					deferred = (self._smtpPool.sendMail(
+						sender=current['fEmail'],
+						to=current['tEmail'],
+						file=file
 					))
-
-					if config.getboolean('smtp', 'ssl'):
-						(reactor.connectSSL(
-							config.get('smtp', 'hostname'),
-							config.getint('smtp', 'portname'),
-							factory,
-							contextFactory,
-							timeout=10,
-						))
-					else:
-						(reactor.connectTCP(
-							config.get('smtp', 'hostname'),
-							config.getint('smtp', 'portname'),
-							factory,
-							timeout=10,
-						))
 
 				# Clean
 				del current
@@ -574,7 +555,7 @@ class SenderService(Service):
 				itemStopped = isinstance(e, SenderStopItem)
 
 				# Show error if not stopped
-				if not itemStopped:
+				if not itemStopped and not isinstance(e, SMTPClientError):
 					err()
 
 				if item.retries > 0 or itemStopped:
@@ -597,7 +578,7 @@ class SenderService(Service):
 
 				# Debug
 				(msg(self.name,
-					'queueProcess item', item.id, 'fallback', repr(e), system='-'))
+					'queueProcess item', item.id, 'fallback', repr(e), str(e), system='-'))
 		finally:
 			self._process -= 1
 
@@ -835,7 +816,7 @@ class SenderService(Service):
 					headers.setRawHeaders('X-Sender', ['{0}'.format(hash)])
 
 					# Download file to self tmp
-					response = (yield self._agent.request(
+					response = (yield self._httpPool.request(
 						'GET',
 						url,
 						headers=headers,

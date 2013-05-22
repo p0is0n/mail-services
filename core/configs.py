@@ -108,6 +108,7 @@ class Config(ConfigParser, Notify):
 	  'username=',
 	  'password=',
 	  'ssl=no',
+	  'poolsize=2',
 	))
 
 	readed_file = None
