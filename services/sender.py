@@ -112,7 +112,7 @@ class SenderService(Service):
 
 		# Smtp pool
 		self._smtpPool = (ESMTPSenderPool(
-			poolsize=config.getint('smpt', 'poolsize'),
+			poolsize=config.getint('smtp', 'poolsize'),
 			username=config.get('smtp', 'username'),
 			password=config.get('smtp', 'password'),
 			hostname=config.get('smtp', 'hostname'),
