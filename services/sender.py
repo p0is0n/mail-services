@@ -59,6 +59,7 @@ from twisted.internet.defer import DeferredQueue, inlineCallbacks, returnValue
 from twisted.internet.defer import fail, succeed
 from twisted.internet.task import cooperate
 from twisted.internet.reactor import callLater
+from twisted.internet.error import ConnectError, ConnectionClosed
 from twisted.internet import reactor
 from twisted.web.http import OK, NOT_FOUND, PARTIAL_CONTENT
 from twisted.web.iweb import UNKNOWN_LENGTH, IResponse
@@ -69,7 +70,7 @@ from core.dirs import tmp
 from core.constants import DEBUG, DEBUG_SENDER, CHARSET, VERSION_NAME, VERSION, USERAGENT
 from core.utils import sleep
 from core.configs import config
-from core.smtp import ESMTPSenderPool, SMTPClientError
+from core.smtp import ESMTPSenderPool, SMTPClientError, ESMTPSenderPoolError, SMTPConnectError, SMTPProtocolError
 from core.http import Headers, HttpAgent, BufferProtocol, FileProtocol, ContentDecoderAgent, GzipDecoder, HTTPError
 
 
@@ -197,6 +198,9 @@ class SenderService(Service):
 
 		# Show info
 		msg(self.name, 'stops')
+
+		# Close smtp
+		self._smtpPool.closeConnections()
 
 		def s1(code, self=self):
 			(msg(self.name,
@@ -508,6 +512,10 @@ class SenderService(Service):
 				# Clean
 				del itemMessageParams
 
+				for key in ('fEmail', 'tEmail'):
+					if isinstance(current[key], UnicodeType):
+						current[key] = current[key].encode(self.charsetMessage, 'ignore')
+
 				file = StringIO()
 
 				g = Generator(file, mangle_from_=True)
@@ -553,12 +561,14 @@ class SenderService(Service):
 					err()
 			except Exception, e:
 				itemStopped = isinstance(e, SenderStopItem)
+				itemRetry = itemStopped or item.retries > 0 or isinstance(e, (ESMTPSenderPoolError, 
+					SMTPConnectError, SMTPProtocolError, ConnectError, ConnectionClosed))
 
 				# Show error if not stopped
 				if not itemStopped and not isinstance(e, SMTPClientError):
 					err()
 
-				if item.retries > 0 or itemStopped:
+				if itemRetry:
 					# Fallback
 					tos.add(item)
 

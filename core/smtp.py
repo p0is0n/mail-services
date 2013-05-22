@@ -32,7 +32,7 @@ from twisted.internet.defer import DeferredQueue, inlineCallbacks, returnValue
 from twisted.internet.defer import fail, succeed
 from twisted.internet.reactor import callLater
 
-from twisted.mail.smtp import ESMTPSenderFactory as _ESMTPSenderFactory, ESMTPSender as _ESMTPSender, SMTPConnectError
+from twisted.mail.smtp import ESMTPSenderFactory as _ESMTPSenderFactory, ESMTPSender as _ESMTPSender, SMTPConnectError, SMTPProtocolError
 from twisted.mail.smtp import ESMTPClient as _ESMTPClient, DNSNAME, SUCCESS, quoteaddr, SMTPProtocolError, SMTPDeliveryError, SMTPClientError
 from twisted.mail.smtp import CramMD5ClientAuthenticator, LOGINAuthenticator, PLAINAuthenticator
 from twisted.mail import relaymanager
@@ -88,6 +88,7 @@ class ESMTPClient(_ESMTPClient):
 	requireTransportSecurity = False
 	requireAuthentication = False
 
+	connected = False
 	debug = DEBUG
 
 	def __init__(self, username, secret, contextFactory=None, *args, **kwargs):
@@ -190,6 +191,8 @@ class ESMTPClient(_ESMTPClient):
 		if DEBUG:
 			msg('ESMTPClient', 'connection lost', self, self.factory)
 
+		self.connected = False
+
 		if self._requestDeferred is not None:
 			callLater(0.1, self._requestDeferred.errback, reason)
 
@@ -206,6 +209,8 @@ class ESMTPClient(_ESMTPClient):
 			msg('ESMTPClient', 'done', self, self.factory)
 
 		self._lastreq = time()
+
+		self.connected = True
 		self.factory.resetDelay()
 
 		if self.factory.deferred is not None:
@@ -321,8 +326,10 @@ class ESMTPClient(_ESMTPClient):
 class ESMTPFactory(ReconnectingClientFactory):
 
 	noisy = DEBUG
-	maxDelay = 3
 	domain = DNSNAME
+
+	maxDelay = 5
+	maxRetries = 5
 
 	protocol = ESMTPClient
 	protocolInstance = None
@@ -470,6 +477,50 @@ class ESMTPSenderPool(object):
 		self.errorsReconnecting = 0
 		self.errorsReconnectingLimit = 5
 
+	def closeConnections(self):
+		if self._commands:
+			# Cancel
+			for deferred, method, args, kwargs in self._commands:
+				deferred.errback(ESMTPSenderPoolError(
+					'Close connection'))
+
+			# Clean
+			self._commands[:] = []
+
+		f = self._pendingsList.copy()
+		c = self._freeClients.union(self._busyClients).copy()
+
+		self._pendingsList.clear()
+
+		self._busyClients.clear()
+		self._freeClients.clear()
+
+		for factory in f:
+			factory.stopTrying()
+			factory.continueTrying = 0
+
+			if factory.connector.state in ('connecting', 'connected'):
+				try:
+					factory.connector.stopConnecting()
+					factory.connector.disconnect()
+				except:
+					# Skip error
+					pass
+
+		for client in c:
+			client.factory.stopTrying()
+			client.factory.continueTrying = 0
+
+			if client.factory.connector.state in ('connecting', 'connected'):
+				try:
+					client.factory.connector.stopConnecting()
+					client.factory.connector.disconnect()
+				except:
+					# Skip error
+					pass
+					
+			client.transport.loseConnection()
+
 	def addPendings(self, factory):
 		if DEBUG:
 			msg('ESMTPSenderPool', 'addPendings', factory)
@@ -542,8 +593,8 @@ class ESMTPSenderPool(object):
 					if not self._pendingsList:
 						# Cancel
 						for deferred, method, args, kwargs in self._commands:
-							deferred.errback(ESMTPSenderPoolError('ESMTPSenderPool', 
-								'cannot connect to any server, please check you connection params to smtp'))
+							deferred.errback(ESMTPSenderPoolError( 
+								'Cannot connect to any server, please check you connection params to smtp'))
 
 						# Clean
 						self._commands[:] = []
@@ -638,20 +689,21 @@ class ESMTPSenderPool(object):
 		@param client: An instance of a L{Protocol}.
 		"""
 		if DEBUG:
-			msg('ESMTPSenderPool', 'clientFree', client, client.factory)
+			msg('ESMTPSenderPool', 'clientFree', client, client.factory, client.connected)
 
 		if client in self._busyClients:
 			self._busyClients.remove(client)
 
 		# Free client
-		self._freeClients.add(client)
+		if client.connected:
+			self._freeClients.add(client)
 
-		if len(self._commands):
-			(deferred, method, args, kwargs) = self._commands.pop(0)
+			if len(self._commands):
+				(deferred, method, args, kwargs) = self._commands.pop(0)
 
-			# With chain deferred
-			self.performRequestOnClient(self._freeClients.pop(), method, 
-				args, kwargs).chainDeferred(deferred)
+				# With chain deferred
+				self.performRequestOnClient(self._freeClients.pop(), method, 
+					args, kwargs).chainDeferred(deferred)
 
 	def __getattr__(self, name):
 		try:
