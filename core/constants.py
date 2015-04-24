@@ -29,7 +29,7 @@ from core.dirs import root
 
 
 VERSION_NAME = 'Mail-Services (https://github.com/p0is0n/mail-services)'
-VERSION = '0.2b'
+VERSION = '1.0'
 
 DEBUG = config.debugMode()
 DEBUG_SENDER = config.getboolean('sender', 'debug')

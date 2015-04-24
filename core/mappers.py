@@ -34,340 +34,343 @@ from core.dirs import tmp, dbs
 
 class Base(object):
 
-	@classmethod
-	def fromDict(cls, params):
-		return cls(**params)
+    @classmethod
+    def fromDict(cls, params):
+        return cls(**params)
 
-	def toDict(self):
-		raise NotImplementedError
+    def toDict(self):
+        raise NotImplementedError
 
-	def delete(self):
-		"""Delete object"""
+    def delete(self):
+        """Delete object"""
 
 
 class BaseWithStorage(Base):
 
-	prefix = None
+    prefix = None
 
-	def path(self, name):
-		id = ceil(self.id / 1000.)
+    def path(self, name):
+        id = ceil(self.id / 1000.)
 
-		path = dbs('{0:.0f}'.format(ceil((id) / 100.)), '{0:.0f}'.format(id))
-		file = os.path.join(path, '{0}_{1}_{2}'.format(self.prefix, self.id, name))
+        path = dbs('{0:.0f}'.format(ceil((id) / 100.)), '{0:.0f}'.format(id))
+        file = os.path.join(path, '{0}_{1}_{2}'.format(self.prefix, self.id, name))
 
-		return ((
-			path,
-			file
-		))
+        return ((
+            path,
+            file
+        ))
 
-	def set(self, name, value):
-		if self.id is None:
-			raise RuntimeError('Cannot set with ID none')
+    def set(self, name, value):
+        if self.id is None:
+            raise RuntimeError('Cannot set with ID none')
 
-		if value is not None:
-			path, file = self.path(name)
+        if value is not None:
+            path, file = self.path(name)
 
-			if not os.path.exists(path):
-				os.makedirs(path, 0777)
-				os.chmod(path, 0777)
+            if not os.path.exists(path):
+                os.makedirs(path, 0777)
+                os.chmod(path, 0777)
 
-			with open(file, 'wb') as fp:
-				mdump(value, fp)
+            with open(file, 'wb') as fp:
+                mdump(value, fp)
 
-	def get(self, name):
-		if self.id is None:
-			raise RuntimeError('Cannot get with ID none')
+    def get(self, name):
+        if self.id is None:
+            raise RuntimeError('Cannot get with ID none')
 
-		if self._cachedLife:
-			# Try find in cache
-			result = self._cachedGet(name)
-			if not result is self._cachedNone:
-				# Success
-				return result
+        if self._cachedLife:
+            # Try find in cache
+            result = self._cachedGet(name)
+            if not result is self._cachedNone:
+                # Success
+                return result
 
-		path, file = self.path(name)
+        path, file = self.path(name)
 
-		if os.path.exists(file):
-			with open(file, 'rb') as fp:
-				result = mload(fp)
+        if os.path.exists(file):
+            with open(file, 'rb') as fp:
+                result = mload(fp)
 
-				# If cache enabled, set it
-				if self._cachedLife:
-					self._cachedSet(name, result)
+                # If cache enabled, set it
+                if self._cachedLife:
+                    self._cachedSet(name, result)
 
-				# Return to user, not from cache
-				return result
+                # Return to user, not from cache
+                return result
 
-	def deleteFiles(self, *files):
-		for name in files:
-			path, file = self.path(name)
+    def deleteFiles(self, *files):
+        for name in files:
+            path, file = self.path(name)
 
-			if os.path.exists(file):
-				try:
-					os.unlink(file)
-				except:
-					err()
+            if os.path.exists(file):
+                try:
+                    os.unlink(file)
+                except:
+                    err()
 
-			# Clean cache
-			self._cachedDelete(name)
+            # Clean cache
+            self._cachedDelete(name)
 
-	_cached = None
+    _cached = None
 
-	_cachedNone = object()
-	_cachedLife = 60
-	_cachedTime = None
+    _cachedNone = object()
+    _cachedLife = 60
+    _cachedTime = None
 
-	def _cachedSet(self, name, value):
-		if DEBUG:
-			msg(self, '_cachedSet', name)
+    def _cachedSet(self, name, value):
+        if DEBUG:
+            msg(self, '_cachedSet', name)
 
-		if self._cached is None:
-			# Init
-			self._cached = dict()
-			self._cachedTime = dict()
+        if self._cached is None:
+            # Init
+            self._cached = dict()
+            self._cachedTime = dict()
 
-		if (name in self._cachedTime and self._cachedTime[name] is not None):
-			if self._cachedTime[name].active():
-				self._cachedTime[name].cancel()
+        if (name in self._cachedTime and self._cachedTime[name] is not None):
+            if self._cachedTime[name].active():
+                self._cachedTime[name].cancel()
 
-			# Clean
-			self._cachedTime[name] = None
+            # Clean
+            self._cachedTime[name] = None
 
-		self._cached[name] = value
-		self._cachedTime[name] = callLater(self._cachedLife, self._cachedDelete, name)
+        self._cached[name] = value
+        self._cachedTime[name] = callLater(self._cachedLife, self._cachedDelete, name)
 
-	def _cachedGet(self, name):
-		if DEBUG:
-			msg(self, '_cachedGet', name)
+    def _cachedGet(self, name):
+        if DEBUG:
+            msg(self, '_cachedGet', name)
 
-		if self._cached is not None and name in self._cached:
-			if (name in self._cachedTime and self._cachedTime[name] is not None):
-				if self._cachedTime[name].active():
-					if DEBUG:
-						msg(self, '_cachedGet', name, 'reset')
+        if self._cached is not None and name in self._cached:
+            if (name in self._cachedTime and self._cachedTime[name] is not None):
+                if self._cachedTime[name].active():
+                    if DEBUG:
+                        msg(self, '_cachedGet', name, 'reset')
 
-					self._cachedTime[name].reset(self._cachedLife)
+                    self._cachedTime[name].reset(self._cachedLife)
 
-			return self._cached[name]
+            return self._cached[name]
 
-		return self._cachedNone
+        return self._cachedNone
 
-	def _cachedDelete(self, name):
-		if DEBUG:
-			msg(self, '_cachedDelete', name)
+    def _cachedDelete(self, name):
+        if DEBUG:
+            msg(self, '_cachedDelete', name)
 
-		if self._cached is not None and name in self._cached:
-			del self._cached[name]
+        if self._cached is not None and name in self._cached:
+            del self._cached[name]
 
-			# Clean
-			if not self._cached:
-				self._cached = None
+            # Clean
+            if not self._cached:
+                self._cached = None
 
-		if self._cachedTime is not None:
-			if (name in self._cachedTime and self._cachedTime[name] is not None):
-				if self._cachedTime[name].active():
-					self._cachedTime[name].cancel()
+        if self._cachedTime is not None:
+            if (name in self._cachedTime and self._cachedTime[name] is not None):
+                if self._cachedTime[name].active():
+                    self._cachedTime[name].cancel()
 
-				# Clean
-				self._cachedTime[name] = None
-				if not self._cachedTime:
-					self._cachedTime = None
+                # Clean
+                self._cachedTime[name] = None
+                if not self._cachedTime:
+                    self._cachedTime = None
 
 
 class Message(BaseWithStorage):
 
-	prefix = 'm'
+    prefix = 'm'
 
-	id = None
-	time = None
-	last = None
-	tos = 0
-	sender = None
+    id = None
+    time = None
+    last = None
+    tos = 0
+    sender = None
 
-	available = ((
-		'id',
-		'subject',
-		'time',
-		'last',
-		'text',
-		'html',
-		'tos',
-		'sender',
-		'params',
-	))
+    available = ((
+        'id',
+        'subject',
+        'time',
+        'last',
+        'text',
+        'html',
+        'tos',
+        'sender',
+        'params',
+    ))
 
-	def __init__(self, **params):
-		if len(params):
-			if 'id' in params:
-				self.id = params.pop('id')
+    def __init__(self, **params):
+        if len(params):
+            if 'id' in params:
+                self.id = params.pop('id')
 
-			for key, value in params.iteritems():
-				if not key in self.available:
-					raise RuntimeError('Unknown key for Message {0}'.format(key))
+            for key, value in params.iteritems():
+                if not key in self.available:
+                    raise RuntimeError('Unknown key for Message {0}'.format(key))
 
-				setattr(self, key, value)
+                setattr(self, key, value)
 
-			# Default
-			if self.time is None:
-				self.time = int(reactor.seconds())
+            # Default
+            if self.time is None:
+                self.time = int(reactor.seconds())
 
-	def toDict(self):
-		return (dict(
-			id=self.id,
-			time=self.time,
-			last=self.last,
-			tos=self.tos,
-			sender=self.sender
-		))
+    def toDict(self):
+        return (dict(
+            id=self.id,
+            time=self.time,
+            last=self.last,
+            tos=self.tos,
+            sender=self.sender
+        ))
 
-	@property
-	def params(self):
-		return self.get('params')
+    @property
+    def params(self):
+        return self.get('params')
 
-	@params.setter
-	def params(self, value):
-		return self.set('params', value)
+    @params.setter
+    def params(self, value):
+        return self.set('params', value)
 
-	@property
-	def subject(self):
-		return self.get('subject')
+    @property
+    def subject(self):
+        return self.get('subject')
 
-	@subject.setter
-	def subject(self, value):
-		return self.set('subject', value)
+    @subject.setter
+    def subject(self, value):
+        return self.set('subject', value)
 
-	@property
-	def html(self):
-		return self.get('html')
+    @property
+    def html(self):
+        return self.get('html')
 
-	@html.setter
-	def html(self, value):
-		return self.set('html', value)
+    @html.setter
+    def html(self, value):
+        return self.set('html', value)
 
-	@property
-	def text(self):
-		return self.get('text')
+    @property
+    def text(self):
+        return self.get('text')
 
-	@text.setter
-	def text(self, value):
-		return self.set('text', value)
+    @text.setter
+    def text(self, value):
+        return self.set('text', value)
 
-	def delete(self):
-		self.deleteFiles('params', 'subject', 'html', 'text')
+    def delete(self):
+        self.deleteFiles('params', 'subject', 'html', 'text')
 
 
 class To(BaseWithStorage):
 
-	prefix = 't'
+    prefix = 't'
 
-	id = None
-	message = None
-	group = None
-	email = None
-	name = None
-	time = None
-	after = None
-	priority = 0
-	retries = None
+    id = None
+    message = None
+    group = None
+    email = None
+    name = None
+    time = None
+    after = None
+    priority = 0
+    retries = None
 
-	available = ((
-		'id',
-		'message',
-		'group',
-		'email',
-		'name',
-		'time',
-		'parts',
-		'after',
-		'priority',
-		'retries',
-	))
+    available = ((
+        'id',
+        'message',
+        'group',
+        'email',
+        'name',
+        'time',
+        'parts',
+        'after',
+        'priority',
+        'retries',
+    ))
 
-	def __init__(self, **params):
-		if len(params):
-			if 'id' in params:
-				self.id = params.pop('id')
+    def __init__(self, **params):
+        if len(params):
+            if 'id' in params:
+                self.id = params.pop('id')
 
-			for key, value in params.iteritems():
-				if not key in self.available:
-					raise RuntimeError('Unknown key for To {0}'.format(key))
+            for key, value in params.iteritems():
+                if not key in self.available:
+                    raise RuntimeError('Unknown key for To {0}'.format(key))
 
-				setattr(self, key, value)
+                setattr(self, key, value)
 
-			# Default
-			if self.time is None:
-				self.time = int(reactor.seconds())
+            # Default
+            if self.time is None:
+                self.time = int(reactor.seconds())
 
-			if self.retries is None:
-				self.retries = 1
+            if self.retries is None:
+                self.retries = 1
 
-	def toDict(self):
-		return (dict(
-			id=self.id,
-			message=self.message,
-			group=self.group,
-			email=self.email,
-			name=self.name,
-			time=self.time,
-			after=self.after,
-			priority=self.priority,
-			retries=self.retries,
-		))
+    def toDict(self):
+        return (dict(
+            id=self.id,
+            message=self.message,
+            group=self.group,
+            email=self.email,
+            name=self.name,
+            time=self.time,
+            after=self.after,
+            priority=self.priority,
+            retries=self.retries,
+        ))
 
-	@property
-	def parts(self):
-		return self.get('parts')
+    @property
+    def parts(self):
+        return self.get('parts')
 
-	@parts.setter
-	def parts(self, value):
-		return self.set('parts', value)
+    @parts.setter
+    def parts(self, value):
+        return self.set('parts', value)
 
-	def delete(self):
-		self.deleteFiles('parts')
+    def delete(self):
+        self.deleteFiles('parts')
+
+    def __repr__(self):
+        return '<To 0x{0} {1!r}-{2!r}>'.format(self.id, self.email, self.name)
 
 
 class Group(Base):
 
-	id = None
-	all = 0
-	wait = 0
-	sending = 0
-	sent = 0
-	errors = 0
-	time = None
-	status = GROUP_STATUS_ACTIVE
+    id = None
+    all = 0
+    wait = 0
+    sending = 0
+    sent = 0
+    errors = 0
+    time = None
+    status = GROUP_STATUS_ACTIVE
 
-	available = ((
-		'id',
-		'all',
-		'wait',
-		'sending',
-		'sent',
-		'errors',
-		'time',
-		'status',
-	))
+    available = ((
+        'id',
+        'all',
+        'wait',
+        'sending',
+        'sent',
+        'errors',
+        'time',
+        'status',
+    ))
 
-	def __init__(self, **params):
-		if len(params):
-			for key, value in params.iteritems():
-				if not key in self.available:
-					raise RuntimeError('Unknown key for Group {0}'.format(key))
+    def __init__(self, **params):
+        if len(params):
+            for key, value in params.iteritems():
+                if not key in self.available:
+                    raise RuntimeError('Unknown key for Group {0}'.format(key))
 
-				setattr(self, key, value)
+                setattr(self, key, value)
 
-			# Default
-			if self.time is None:
-				self.time = int(reactor.seconds())
+            # Default
+            if self.time is None:
+                self.time = int(reactor.seconds())
 
-	def toDict(self):
-		return (dict(
-			id=self.id,
-			all=self.all,
-			wait=self.wait,
-			sending=self.sending,
-			sent=self.sent,
-			errors=self.errors,
-			time=self.time,
-			status=self.status
-		))
+    def toDict(self):
+        return (dict(
+            id=self.id,
+            all=self.all,
+            wait=self.wait,
+            sending=self.sending,
+            sent=self.sent,
+            errors=self.errors,
+            time=self.time,
+            status=self.status
+        ))
