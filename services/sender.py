@@ -499,8 +499,11 @@ class SenderService(Service):
                     current['root']['To'] = current['tEmail']
 
                 current['root']['Date'] = formatdate(localtime=1)
-                current['root'].add_header('Message-ID', '%s' % (messageid('{0}'.format(item.id))))
-                # current['root'].add_header('X-Mailer', '%s %s' % (VERSION_NAME, VERSION))
+
+                if itemGroup is not None:
+                    current['root'].add_header('Message-ID', '%s' % (messageid('g{0}'.format(itemGroup.id))))
+                else:
+                    current['root'].add_header('Message-ID', '%s' % (messageid('{0}'.format(item.id))))
 
                 if config.get('common', 'organization'):
                     current['root'].add_header('Organization', self.encodeToString(config.get('common', 'organization')))
@@ -523,11 +526,11 @@ class SenderService(Service):
 
                 file.seek(0, 0)
 
-                # if DEBUG:
-                #     (msg(self.name,
-                #         'queueProcess item', item.id, 'data', file.read(), current, system='-'))
-                #
-                #     file.seek(0, 0)
+                if DEBUG:
+                    (msg(self.name,
+                        'queueProcess item', item.id, 'data', file.read(), current, system='-'))
+
+                    file.seek(0, 0)
 
                 if DEBUG_SENDER:
                     deferred = succeed(('DEBUG OK', (current['tEmail'], )))
