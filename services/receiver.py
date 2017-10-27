@@ -51,7 +51,7 @@ class ReceiverError(Exception):
 
 class ReceiverProtocol(Int32StringReceiver):
 
-    MAX_LENGTH = 999999
+    MAX_LENGTH = 1024 * 1024 * 5
     COMMANDS_MASK = 'commands_{0}'.format
 
     def connectionMade(self):
