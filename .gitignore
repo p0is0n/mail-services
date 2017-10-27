@@ -35,3 +35,4 @@ nosetests.xml
 .pydevproject
 
 configs.conf
+_trial_temp
