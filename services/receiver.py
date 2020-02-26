@@ -400,8 +400,11 @@ class ReceiverProtocol(Int32StringReceiver):
                 if not isinstance(to, DictType):
                     raise ReceiverError('Value "to" must be dictonary type')
 
-                if (not to['email']) or (not to['name']) or (int(to.get('priority', 0)) < 0):
+                if (not to['email']) or (not to['name']):
                     raise ReceiverError('Value "to" must have "email" and "name" fields')
+
+                if (int(to.get('priority', 0)) < 0):
+                    raise ReceiverError('Value "priority" in "to" must be positive')
 
                 to['priority'] = min(QUEUE_MAX_PRIORITY, int(to.get('priority', 0)))
                 to['priority'] = (-(to['priority'] - QUEUE_MAX_PRIORITY) + 1) if to['priority'] > 0 else 0
@@ -471,6 +474,7 @@ class ReceiverProtocol(Int32StringReceiver):
             if itemGroup:
                 # Check group
                 group = groups.get(itemGroup)
+
                 if group is None or group.status == GROUP_STATUS_INACTIVE:
                     raise ReceiverError('Value "group" {0} not found or inactive'.format(itemGroup))
             else:
