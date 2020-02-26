@@ -265,6 +265,8 @@ class To(BaseWithStorage):
     group = None
     email = None
     name = None
+    replyEmail = None
+    replyName = None
     time = None
     after = None
     priority = 0
@@ -276,6 +278,8 @@ class To(BaseWithStorage):
         'group',
         'email',
         'name',
+        'replyEmail',
+        'replyName',
         'time',
         'parts',
         'after',
@@ -308,6 +312,8 @@ class To(BaseWithStorage):
             group=self.group,
             email=self.email,
             name=self.name,
+            replyEmail=self.replyEmail,
+            replyName=self.replyName,
             time=self.time,
             after=self.after,
             priority=self.priority,
