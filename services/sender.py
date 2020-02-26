@@ -511,13 +511,14 @@ class SenderService(Service):
                     current['root']['To'] = current['tEmail']
 
                 # Reply-To
-                if current['rtNames']:
-                    current['root']['Reply-To'] = ('%s <%s>' % (
-                        Header(current['rtNames'], self.charsetMessage),
-                        current['rtEmail']
-                    ))
-                else:
-                    current['root']['Reply-To'] = current['rtEmail']
+                if current['rtEmail']:
+                    if current['rtNames']:
+                        current['root']['Reply-To'] = ('%s <%s>' % (
+                            Header(current['rtNames'], self.charsetMessage),
+                            current['rtEmail']
+                        ))
+                    else:
+                        current['root']['Reply-To'] = current['rtEmail']
 
                 current['root']['Date'] = formatdate(localtime=1)
 
