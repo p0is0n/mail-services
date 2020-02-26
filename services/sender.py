@@ -434,6 +434,18 @@ class SenderService(Service):
                     current['tEmail'] = item.email
                     current['tNames'] = None
 
+                # Reply-To email
+                if item.replyEmail:
+                    if item.replyName:
+                        current['rtEmail'] = item.replyEmail
+                        current['rtNames'] = self.encodeToString(item.replyName)
+                    else:
+                        current['rtEmail'] = item.replyEmail
+                        current['rtNames'] = None
+                else:
+                    current['rtEmail'] = None
+                    current['rtNames'] = None
+
                 if itemMessage.subject:
                     current['subject'] = self.encodeToString(itemMessage.subject)
                 else:
@@ -497,6 +509,15 @@ class SenderService(Service):
                     ))
                 else:
                     current['root']['To'] = current['tEmail']
+
+                # Reply-To
+                if current['rtNames']:
+                    current['root']['Reply-To'] = ('%s <%s>' % (
+                        Header(current['rtNames'], self.charsetMessage),
+                        current['rtEmail']
+                    ))
+                else:
+                    current['root']['Reply-To'] = current['rtEmail']
 
                 current['root']['Date'] = formatdate(localtime=1)
 
